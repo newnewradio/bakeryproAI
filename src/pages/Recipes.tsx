@@ -13,7 +13,9 @@ import {
   X,
   RefreshCw,
   Upload,
-  Image
+  Image,
+  Thermometer,
+  Droplets
 } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { toast } from 'react-hot-toast'
@@ -84,6 +86,16 @@ export default function Recipes() {
   const [imageFile, setImageFile] = useState<File | null>(null)
   const [imagePreview, setImagePreview] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
+
+  // ÚJ ÁLLAPOTOK A LÉPÉSEK KEZELÉSÉHEZ (Hozzáadva)
+  const [showAddStepForm, setShowAddStepForm] = useState(false)
+  const [newStep, setNewStep] = useState({
+    title: '',
+    description: '',
+    duration_minutes: 15,
+    temperature: '',
+    humidity: ''
+  })
 
   useEffect(() => {
     loadRecipes()
@@ -218,22 +230,15 @@ export default function Recipes() {
   const handleImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
       const file = e.target.files[0]
-      
-      // Check file size (max 5MB)
       if (file.size > 5 * 1024 * 1024) {
         toast.error('A kép mérete nem lehet nagyobb 5MB-nál')
         return
       }
-      
-      // Check file type
       if (!file.type.startsWith('image/')) {
         toast.error('Csak képfájlok tölthetők fel')
         return
       }
-      
       setImageFile(file)
-      
-      // Create preview
       const reader = new FileReader()
       reader.onloadend = () => {
         setImagePreview(reader.result as string)
@@ -242,77 +247,82 @@ export default function Recipes() {
     }
   }
 
-const uploadImage = async (file: File): Promise<string | null> => {
-  try {
-    const fileExt = file.name.split('.').pop();
-    const fileName = `${Date.now()}.${fileExt}`;
-    
-    // JAVÍTVA: Az útvonal a 'products' mappával kezdődik a bucket-en belül.
-    const filePath = `products/${fileName}`; 
-    
-    // Fájl feltöltése a Supabase Storage-ba
-    const { error: uploadError } = await supabase.storage
-      .from('images') // JAVÍTVA: A BUCKET neve a képed alapján 'images'.
-      .upload(filePath, file); // A filePath pedig a 'products/...' mappa + fájlnév.
-    
-    if (uploadError) {
-      console.error('Error uploading image:', uploadError);
-      toast.error(`Hiba a kép feltöltésekor: ${uploadError.message}`);
+  const uploadImage = async (file: File): Promise<string | null> => {
+    try {
+      const fileExt = file.name.split('.').pop();
+      const fileName = `${Date.now()}.${fileExt}`;
+      const filePath = `products/${fileName}`; 
+      const { error: uploadError } = await supabase.storage
+        .from('images') 
+        .upload(filePath, file); 
+      if (uploadError) {
+        console.error('Error uploading image:', uploadError);
+        toast.error(`Hiba a kép feltöltésekor: ${uploadError.message}`);
+        return null;
+      }
+      const { data } = supabase.storage
+        .from('images') 
+        .getPublicUrl(filePath);
+      return data.publicUrl;
+    } catch (error) {
+      console.error('Error in uploadImage function:', error);
+      toast.error('Váratlan hiba történt a képfeltöltés során.');
       return null;
     }
-    
-    // Nyilvános URL lekérése
-    const { data } = supabase.storage
-      .from('images') // JAVÍTVA: A BUCKET neve itt is 'images'.
-      .getPublicUrl(filePath);
-    
-    return data.publicUrl;
-  } catch (error) {
-    console.error('Error in uploadImage function:', error);
-    toast.error('Váratlan hiba történt a képfeltöltés során.');
-    return null;
+  };
+
+  // ÚJ FUNKCIÓK A LÉPÉSEKHOZ (Hozzáadva)
+  const handleAddStep = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedRecipe) return;
+    try {
+      const nextNumber = recipeSteps.length > 0 ? Math.max(...recipeSteps.map(s => s.step_number)) + 1 : 1;
+      const { error } = await supabase
+        .from('recipe_steps')
+        .insert([{
+          recipe_id: selectedRecipe.id,
+          step_number: nextNumber,
+          title: newStep.title,
+          description: newStep.description,
+          duration_minutes: newStep.duration_minutes,
+          temperature: newStep.temperature ? parseInt(newStep.temperature) : null,
+          humidity: newStep.humidity ? parseInt(newStep.humidity) : null
+        }]);
+      if (error) throw error;
+      toast.success('Lépés hozzáadva');
+      setNewStep({ title: '', description: '', duration_minutes: 15, temperature: '', humidity: '' });
+      setShowAddStepForm(false);
+      loadRecipeSteps(selectedRecipe.id);
+    } catch (e) { toast.error('Hiba a mentéskor'); }
   }
-};
+
+  const handleDeleteStep = async (id: string) => {
+    if (!confirm('Biztosan törli ezt a lépést?')) return;
+    const { error } = await supabase.from('recipe_steps').delete().eq('id', id);
+    if (!error) {
+      toast.success('Lépés törölve');
+      if (selectedRecipe) loadRecipeSteps(selectedRecipe.id);
+    }
+  }
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    
     try {
       setLoading(true)
-      
-      // Validate form data
       if (!formData.name) {
         toast.error('Kérjük adja meg a recept nevét')
         setLoading(false)
         return
       }
-      
-      if (formData.ingredients.some(ing => !ing.name || !ing.amount)) {
-        toast.error('Kérjük töltse ki az összes hozzávaló mezőt')
-        setLoading(false)
-        return
-      }
-      
-      if (formData.instructions.some(inst => !inst)) {
-        toast.error('Kérjük töltse ki az összes utasítás mezőt')
-        setLoading(false)
-        return
-      }
-      
-      // Format ingredients
       const formattedIngredients = formData.ingredients.map(ing => ({
         name: ing.name,
         amount: parseFloat(ing.amount.replace(',', '.')),
         unit: ing.unit
       }))
-      
-      // Upload image if provided
       let imageUrl = editingRecipe?.image_url || null
       if (imageFile) {
         imageUrl = await uploadImage(imageFile)
       }
-      
-      // Create recipe data
       const recipeData = {
         name: formData.name,
         description: formData.description || null,
@@ -329,194 +339,79 @@ const uploadImage = async (file: File): Promise<string | null> => {
         image_url: imageUrl,
         created_by: (await supabase.auth.getUser()).data.user?.id
       }
-      
       if (editingRecipe) {
-        // Update existing recipe
         const { error } = await supabase
           .from('products')
           .update(recipeData)
           .eq('id', editingRecipe.id)
-        
-        if (error) {
-          console.error('Database error:', error)
-          toast.error('Hiba a recept frissítésekor')
-          return
-        }
-        
-        toast.success('Recept sikeresen frissítve!')
+        if (error) throw error
+        toast.success('Recept frissítve!')
       } else {
-        // Create new recipe
         const { data, error } = await supabase
           .from('products')
           .insert(recipeData)
           .select()
-        
-        if (error) {
-          console.error('Database error:', error)
-          toast.error('Hiba a recept létrehozásakor')
-          return
-        }
-        
+        if (error) throw error
         if (data && data.length > 0) {
-          // Create recipe steps
           const recipeId = data[0].id
-          
-          // Create default steps
           const defaultSteps = [
-            {
-              recipe_id: recipeId,
-              step_number: 1,
-              title: 'Előkészítés',
-              description: 'Alapanyagok kimérése és előkészítése',
-              duration_minutes: 15
-            },
-            {
-              recipe_id: recipeId,
-              step_number: 2,
-              title: 'Dagasztás',
-              description: 'Alapanyagok összekeverése és dagasztása',
-              duration_minutes: 20
-            },
-            {
-              recipe_id: recipeId,
-              step_number: 3,
-              title: 'Kelesztés',
-              description: 'Tészta kelesztése',
-              duration_minutes: 60,
-              temperature: 30,
-              humidity: 80
-            },
-            {
-              recipe_id: recipeId,
-              step_number: 4,
-              title: 'Formázás',
-              description: 'Tészta formázása',
-              duration_minutes: 15
-            },
-            {
-              recipe_id: recipeId,
-              step_number: 5,
-              title: 'Sütés',
-              description: 'Tészta sütése',
-              duration_minutes: 30,
-              temperature: 220
-            }
+            { recipe_id: recipeId, step_number: 1, title: 'Előkészítés', description: 'Alapanyagok kimérése', duration_minutes: 15 },
+            { recipe_id: recipeId, step_number: 2, title: 'Dagasztás', description: 'Összekeverés', duration_minutes: 20 },
+            { recipe_id: recipeId, step_number: 3, title: 'Kelesztés', description: 'Pihentetés', duration_minutes: 60, temperature: 30, humidity: 80 },
+            { recipe_id: recipeId, step_number: 4, title: 'Formázás', description: 'Tészta formázása', duration_minutes: 15 },
+            { recipe_id: recipeId, step_number: 5, title: 'Sütés', description: 'Sütés', duration_minutes: 30, temperature: 220 }
           ]
-          
-          const { error: stepsError } = await supabase
-            .from('recipe_steps')
-            .insert(defaultSteps)
-          
-          if (stepsError) {
-            console.error('Error creating recipe steps:', stepsError)
-            toast.error('Hiba a recept lépések létrehozásakor')
-          }
+          await supabase.from('recipe_steps').insert(defaultSteps)
         }
-        
-        toast.success('Recept sikeresen létrehozva!')
+        toast.success('Recept létrehozva!')
       }
-      
-      setShowAddModal(false)
-      setEditingRecipe(null)
-      resetForm()
-      loadRecipes()
-    } catch (error) {
-      console.error('Hiba a recept mentésekor:', error)
-      toast.error('Hiba a recept mentésekor')
-    } finally {
-      setLoading(false)
-    }
+      setShowAddModal(false); setEditingRecipe(null); resetForm(); loadRecipes();
+    } catch (error) { toast.error('Hiba a mentéskor'); } finally { setLoading(false); }
   }
 
   const handleDelete = async (id: string) => {
     if (window.confirm('Biztosan törölni szeretné ezt a receptet?')) {
       try {
         setLoading(true)
-        
-        // Delete recipe
-        const { error } = await supabase
-          .from('products')
-          .delete()
-          .eq('id', id)
-        
-        if (error) {
-          console.error('Database error:', error)
-          toast.error('Hiba a recept törlésekor')
-          return
-        }
-        
-        toast.success('Recept sikeresen törölve!')
+        const { error } = await supabase.from('products').delete().eq('id', id)
+        if (error) throw error
+        toast.success('Recept törölve!')
         loadRecipes()
-      } catch (error) {
-        console.error('Hiba a recept törlésekor:', error)
-        toast.error('Hiba a recept törlésekor')
-      } finally {
-        setLoading(false)
-      }
+      } catch (error) { toast.error('Hiba a törléskor'); } finally { setLoading(false); }
     }
   }
 
   const resetForm = () => {
     setFormData({
-      name: '',
-      description: '',
-      ingredients: [{ name: '', amount: '', unit: 'g' }],
-      instructions: [''],
-      prep_time: 0,
-      bake_time: 0,
-      difficulty: 'medium',
-      category: '',
-      yield_amount: 1,
-      cost_per_unit: 0,
-      wholesale_price: 0,
-      retail_price: 0
+      name: '', description: '', ingredients: [{ name: '', amount: '', unit: 'g' }],
+      instructions: [''], prep_time: 0, bake_time: 0, difficulty: 'medium',
+      category: '', yield_amount: 1, cost_per_unit: 0, wholesale_price: 0, retail_price: 0
     })
-    setImageFile(null)
-    setImagePreview(null)
+    setImageFile(null); setImagePreview(null);
   }
 
   const handleEdit = (recipe: Recipe) => {
     setEditingRecipe(recipe)
-    
-    // Format ingredients
     const ingredients = recipe.ingredients?.map(ing => ({
-      name: ing.name || '',
-      amount: ing.amount?.toString() || '',
-      unit: ing.unit || 'g'
+      name: ing.name || '', amount: ing.amount?.toString() || '', unit: ing.unit || 'g'
     })) || [{ name: '', amount: '', unit: 'g' }]
-    
     setFormData({
-      name: recipe.name,
-      description: recipe.description || '',
-      ingredients,
-      instructions: recipe.instructions || [''],
-      prep_time: recipe.prep_time,
-      bake_time: recipe.bake_time,
-      difficulty: recipe.difficulty,
-      category: recipe.category,
-      yield_amount: recipe.yield_amount,
-      cost_per_unit: recipe.cost_per_unit || 0,
-      wholesale_price: recipe.wholesale_price || 0,
-      retail_price: recipe.retail_price || 0
+      name: recipe.name, description: recipe.description || '', ingredients,
+      instructions: recipe.instructions || [''], prep_time: recipe.prep_time,
+      bake_time: recipe.bake_time, difficulty: recipe.difficulty, category: recipe.category,
+      yield_amount: recipe.yield_amount, cost_per_unit: recipe.cost_per_unit || 0,
+      wholesale_price: recipe.wholesale_price || 0, retail_price: recipe.retail_price || 0
     })
-    
-    // Set image preview if exists
-    if (recipe.image_url) {
-      setImagePreview(recipe.image_url)
-    }
-    
+    if (recipe.image_url) setImagePreview(recipe.image_url)
     setShowAddModal(true)
   }
 
   const handleView = (recipe: Recipe) => {
-    setSelectedRecipe(recipe)
-    setShowViewModal(true)
+    setSelectedRecipe(recipe); setShowViewModal(true);
   }
 
   const handleViewSteps = (recipe: Recipe) => {
-    setSelectedRecipe(recipe)
-    loadRecipeSteps(recipe.id)
-    setShowStepsModal(true)
+    setSelectedRecipe(recipe); loadRecipeSteps(recipe.id); setShowStepsModal(true);
   }
 
   const getDifficultyText = (difficulty: string) => {
@@ -1162,92 +1057,102 @@ const uploadImage = async (file: File): Promise<string | null> => {
         </div>
       )}
 
-      {/* View Recipe Steps Modal */}
+      {/* View/Add Recipe Steps Modal (Package Icon) */}
       {showStepsModal && selectedRecipe && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white dark:bg-gray-800 rounded-lg max-w-4xl w-full max-h-[90vh] overflow-y-auto">
+          <div className="bg-white dark:bg-gray-800 rounded-lg max-w-4xl w-full max-h-[90vh] overflow-y-auto shadow-2xl">
             <div className="p-6">
               <div className="flex justify-between items-center mb-6">
-                <h2 className="text-xl font-bold text-gray-900 dark:text-white">
-                  {selectedRecipe.name} - Gyártási lépések
-                </h2>
+                <div>
+                  <h2 className="text-2xl font-bold text-gray-900 dark:text-white">
+                    {selectedRecipe.name} - Gyártási technológia
+                  </h2>
+                  <p className="text-sm text-gray-500">Kezelje a gyártási fázisokat és paramétereket</p>
+                </div>
                 <button
-                  onClick={() => setShowStepsModal(false)}
-                  className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+                  onClick={() => { setShowStepsModal(false); setShowAddStepForm(false); }}
+                  className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 p-2"
                 >
-                  <X className="h-6 w-6" />
+                  <X className="h-7 w-7" />
                 </button>
               </div>
 
               {loading ? (
                 <div className="flex items-center justify-center h-64">
-                  <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-amber-600"></div>
-                </div>
-              ) : recipeSteps.length === 0 ? (
-                <div className="text-center py-12">
-                  <Package className="h-16 w-16 text-gray-400 mx-auto mb-4" />
-                  <h3 className="text-lg font-medium text-gray-900 dark:text-white mb-2">
-                    Nincsenek gyártási lépések
-                  </h3>
-                  <p className="text-gray-500 dark:text-gray-400 mb-4">
-                    Ehhez a recepthez még nincsenek gyártási lépések definiálva.
-                  </p>
+                  <RefreshCw className="animate-spin h-8 w-8 text-amber-600" />
                 </div>
               ) : (
                 <div className="space-y-6">
-                  {recipeSteps.map((step, index) => (
-                    <div 
-                      key={step.id} 
-                      className="border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden"
-                    >
-                      <div className="p-4 bg-gray-50 dark:bg-gray-700">
-                        <div className="flex items-center">
-                          <div className="w-8 h-8 rounded-full bg-amber-100 dark:bg-amber-900/20 flex items-center justify-center mr-3">
-                            <span className="font-medium text-amber-800 dark:text-amber-400">{index + 1}</span>
-                          </div>
-                          <div>
-                            <h3 className="font-medium text-gray-900 dark:text-white">{step.title}</h3>
-                            <div className="flex items-center mt-1">
-                              <Clock className="h-4 w-4 text-gray-500 dark:text-gray-400 mr-1" />
-                              <span className="text-sm text-gray-500 dark:text-gray-400">{step.duration_minutes} perc</span>
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                      
-                      <div className="p-4">
-                        <p className="text-gray-700 dark:text-gray-300 mb-4">{step.description}</p>
-                        
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                          {step.temperature && (
-                            <div className="bg-blue-50 dark:bg-blue-900/20 rounded-lg p-3 flex items-center">
-                              <Thermometer className="h-5 w-5 text-blue-600 dark:text-blue-400 mr-2" />
-                              <div>
-                                <p className="text-xs text-blue-800 dark:text-blue-300">Hőmérséklet</p>
-                                <p className="text-sm font-medium text-blue-900 dark:text-blue-200">{step.temperature}°C</p>
-                              </div>
-                            </div>
-                          )}
-                          
-                          {step.humidity && (
-                            <div className="bg-cyan-50 dark:bg-cyan-900/20 rounded-lg p-3 flex items-center">
-                              <Droplets className="h-5 w-5 text-cyan-600 dark:text-cyan-400 mr-2" />
-                              <div>
-                                <p className="text-xs text-cyan-800 dark:text-cyan-300">Páratartalom</p>
-                                <p className="text-sm font-medium text-cyan-900 dark:text-cyan-200">{step.humidity}%</p>
-                              </div>
-                            </div>
-                          )}
-                        </div>
-                        
-                        {step.notes && (
-                          <div className="mt-4 p-3 bg-amber-50 dark:bg-amber-900/20 rounded-lg">
-                            <p className="text-sm text-amber-800 dark:text-amber-300">{step.notes}</p>
-                          </div>
-                        )}
-                      </div>
+                  {recipeSteps.length === 0 ? (
+                    <div className="text-center py-12 bg-gray-50 dark:bg-gray-700/30 rounded-2xl border-2 border-dashed border-gray-200 dark:border-gray-700">
+                      <Package className="h-12 w-12 text-gray-400 mx-auto mb-4" />
+                      <h3 className="text-lg font-medium text-gray-900 dark:text-white mb-2">Nincsenek gyártási lépések</h3>
+                      <p className="text-gray-500 dark:text-gray-400 mb-6">Kezdje el a gyártási folyamat felépítését.</p>
                     </div>
-                  ))}
+                  ) : (
+                    <div className="space-y-4">
+                      {recipeSteps.map((step, index) => (
+                        <div key={step.id} className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-2xl overflow-hidden shadow-sm">
+                          <div className="p-4 bg-gray-50 dark:bg-gray-800/50 flex items-center justify-between">
+                            <div className="flex items-center">
+                              <div className="w-10 h-10 rounded-full bg-amber-500 text-black flex items-center justify-center mr-4 font-bold text-lg shadow-sm">
+                                {index + 1}
+                              </div>
+                              <div>
+                                <h3 className="font-bold text-gray-900 dark:text-white text-lg">{step.title}</h3>
+                                <div className="flex items-center gap-3 mt-1">
+                                  <span className="text-sm text-gray-500 flex items-center gap-1"><Clock size={14}/> {step.duration_minutes} perc</span>
+                                  {step.temperature && <span className="text-sm text-gray-500 flex items-center gap-1"><Thermometer size={14}/> {step.temperature}°C</span>}
+                                  {step.humidity && <span className="text-sm text-gray-500 flex items-center gap-1"><Droplets size={14}/> {step.humidity}%</span>}
+                                </div>
+                              </div>
+                            </div>
+                            <button onClick={() => handleDeleteStep(step.id)} className="text-gray-400 hover:text-red-500 p-2 transition-colors"><Trash2 size={20} /></button>
+                          </div>
+                          <div className="p-4">
+                            <p className="text-gray-700 dark:text-gray-300 leading-relaxed">{step.description}</p>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {!showAddStepForm ? (
+                    <button 
+                      onClick={() => setShowAddStepForm(true)}
+                      className="w-full py-4 border-2 border-dashed border-amber-500/30 rounded-2xl text-amber-600 hover:bg-amber-50 dark:hover:bg-amber-900/10 transition-all font-bold flex items-center justify-center gap-2"
+                    >
+                      <Plus size={20} /> Új technológiai lépés hozzáadása
+                    </button>
+                  ) : (
+                    <div className="bg-gray-50 dark:bg-gray-900 p-6 rounded-3xl border border-amber-500/50">
+                      <h4 className="text-lg font-bold text-white mb-4">Új lépés felvétele</h4>
+                      <form onSubmit={handleAddStep} className="space-y-4">
+                        <input required placeholder="Lépés címe (pl: Sütés)" value={newStep.title} onChange={e => setNewStep({...newStep, title: e.target.value})} className="w-full bg-white dark:bg-gray-800 border dark:border-gray-700 rounded-xl p-3 text-white" />
+                        <textarea required placeholder="Technológiai leírás..." value={newStep.description} onChange={e => setNewStep({...newStep, description: e.target.value})} className="w-full bg-white dark:bg-gray-800 border dark:border-gray-700 rounded-xl p-3 text-white" rows={2} />
+                        <div className="grid grid-cols-3 gap-3">
+                          <div className="space-y-1">
+                            <label className="text-[10px] text-gray-500 uppercase font-bold ml-1">Időtartam (perc)</label>
+                            <input type="number" required value={newStep.duration_minutes} onChange={e => setNewStep({...newStep, duration_minutes: parseInt(e.target.value)})} className="w-full bg-white dark:bg-gray-800 border dark:border-gray-700 rounded-xl p-3 text-white" />
+                          </div>
+                          <div className="space-y-1">
+                            <label className="text-[10px] text-gray-500 uppercase font-bold ml-1">Hőmérséklet (°C)</label>
+                            <input type="number" value={newStep.temperature} onChange={e => setNewStep({...newStep, temperature: e.target.value})} className="w-full bg-white dark:bg-gray-800 border dark:border-gray-700 rounded-xl p-3 text-white" placeholder="Opcionális" />
+                          </div>
+                          <div className="space-y-1">
+                            <label className="text-[10px] text-gray-500 uppercase font-bold ml-1">Páratartalom (%)</label>
+                            <input type="number" value={newStep.humidity} onChange={e => setNewStep({...newStep, humidity: e.target.value})} className="w-full bg-white dark:bg-gray-800 border dark:border-gray-700 rounded-xl p-3 text-white" placeholder="Opcionális" />
+                          </div>
+                        </div>
+                        <div className="flex gap-2 pt-2">
+                          <button type="button" onClick={() => setShowAddStepForm(false)} className="flex-1 py-3 text-gray-500 font-bold">Mégse</button>
+                          <button type="submit" className="flex-1 bg-amber-600 text-white py-3 rounded-xl font-bold hover:bg-amber-700 flex items-center justify-center gap-2 shadow-lg shadow-amber-900/20">
+                            <Save size={18} /> Lépés mentése
+                          </button>
+                        </div>
+                      </form>
+                    </div>
+                  )}
                 </div>
               )}
             </div>

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import { 
   FileText, 
   Plus, 
@@ -17,7 +17,15 @@ import {
   X,
   Truck,
   MapPin,
-  User
+  User,
+  Package,
+  Printer,
+  ChevronRight,
+  Navigation,
+  UserCheck,
+  Fuel,
+  ExternalLink,
+  AlertTriangle
 } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { toast } from 'react-hot-toast'
@@ -28,7 +36,7 @@ interface DeliveryNote {
   order_id: string | null
   order_number: string
   batch_id: string | null
-  status: 'pending' | 'in_progress' | 'delivered' | 'cancelled'
+  status: 'pending' | 'in_transit' | 'delivered' | 'cancelled'
   driver_id: string | null
   vehicle_id: string | null
   customer_name: string
@@ -39,6 +47,13 @@ interface DeliveryNote {
   delivery_date: string | null
   notes: string | null
   location_id: string | null
+  production_batches?: {
+    batch_number: string
+    status: string
+  }
+  driver_profile?: {
+    full_name: string
+  }
 }
 
 interface Order {
@@ -84,6 +99,7 @@ export default function DeliveryNotes() {
   const [statusFilter, setStatusFilter] = useState('all')
   const [showAddModal, setShowAddModal] = useState(false)
   const [showViewModal, setShowViewModal] = useState(false)
+  const [showAssignModal, setShowAssignModal] = useState(false)
   const [selectedNote, setSelectedNote] = useState<DeliveryNote | null>(null)
   const [orders, setOrders] = useState<Order[]>([])
   const [batches, setBatches] = useState<Batch[]>([])
@@ -97,7 +113,7 @@ export default function DeliveryNotes() {
     vehicle_id: '',
     customer_name: '',
     customer_address: '',
-    delivery_date: '',
+    delivery_date: new Date().toISOString().split('T')[0],
     notes: '',
     location_id: ''
   })
@@ -114,23 +130,24 @@ export default function DeliveryNotes() {
   const loadDeliveryNotes = async () => {
     try {
       setLoading(true)
-      
       const { data, error } = await supabase
         .from('delivery_notes')
-        .select('*')
+        .select(`
+          *,
+          production_batches!delivery_notes_batch_id_fkey (
+            batch_number,
+            status
+          ),
+          driver_profile:profiles!driver_id (
+            full_name
+          )
+        `)
         .order('created_at', { ascending: false })
       
-      if (error) {
-        console.error('Database error:', error)
-        toast.error('Hiba a szállítólevelek betöltésekor')
-        return
-      }
-      
-      if (data) {
-        setDeliveryNotes(data)
-      }
+      if (error) throw error
+      setDeliveryNotes(data || [])
     } catch (error) {
-      console.error('Hiba a szállítólevelek betöltésekor:', error)
+      console.error('Error:', error)
       toast.error('Hiba a szállítólevelek betöltésekor')
     } finally {
       setLoading(false)
@@ -139,200 +156,169 @@ export default function DeliveryNotes() {
 
   const loadOrders = async () => {
     try {
-      // Load orders that are in pending, processing, or confirmed status
       const { data, error } = await supabase
         .from('orders')
         .select('id, order_number, customer_name, status, items')
         .in('status', ['pending', 'processing', 'confirmed'])
         .order('created_at', { ascending: false })
-      
-      if (error) {
-        console.error('Database error:', error)
-        toast.error('Hiba a rendelések betöltésekor')
-        return
-      }
-      
-      if (data) {
-        setOrders(data)
-      }
-    } catch (error) {
-      console.error('Hiba a rendelések betöltésekor:', error)
-      toast.error('Hiba a rendelések betöltésekor')
-    }
+      if (!error && data) setOrders(data)
+    } catch (error) { console.error(error) }
   }
 
   const loadBatches = async () => {
     try {
-      // Load batches that are completed
       const { data, error } = await supabase
         .from('production_batches')
-        .select(`
-          id, 
-          batch_number, 
-          recipe_id, 
-          batch_size, 
-          status,
-          products:recipe_id (name)
-        `)
+        .select(`id, batch_number, recipe_id, batch_size, status, products:products!production_batches_recipe_id_fkey (name)`)
         .eq('status', 'completed')
         .order('created_at', { ascending: false })
-      
-      if (error) {
-        console.error('Database error:', error)
-        toast.error('Hiba a gyártási tételek betöltésekor')
-        return
-      }
-      
-      if (data) {
-        setBatches(data)
-      }
-    } catch (error) {
-      console.error('Hiba a gyártási tételek betöltésekor:', error)
-      toast.error('Hiba a gyártási tételek betöltésekor')
-    }
+      if (!error && data) setBatches(data)
+    } catch (error) { console.error(error) }
   }
 
   const loadDrivers = async () => {
     try {
-      // Load drivers (profiles with role = driver)
-      const { data, error } = await supabase
-        .from('profiles')
-        .select('id, full_name')
-        .eq('role', 'driver')
-        .eq('status', 'active')
-        .order('full_name')
-      
-      if (error) {
-        console.error('Database error:', error)
-        toast.error('Hiba a sofőrök betöltésekor')
-        return
-      }
-      
-      if (data) {
-        setDrivers(data)
-      }
-    } catch (error) {
-      console.error('Hiba a sofőrök betöltésekor:', error)
-      toast.error('Hiba a sofőrök betöltésekor')
-    }
+      const { data, error } = await supabase.from('profiles').select('id, full_name').eq('role', 'driver').eq('status', 'active')
+      if (!error && data) setDrivers(data)
+    } catch (error) { console.error(error) }
   }
 
   const loadVehicles = async () => {
     try {
-      // Load active vehicles
-      const { data, error } = await supabase
-        .from('vehicles')
-        .select('id, license_plate, model')
-        .eq('status', 'active')
-        .order('license_plate')
-      
-      if (error) {
-        console.error('Database error:', error)
-        toast.error('Hiba a járművek betöltésekor')
-        return
-      }
-      
-      if (data) {
-        setVehicles(data)
-      }
-    } catch (error) {
-      console.error('Hiba a járművek betöltésekor:', error)
-      toast.error('Hiba a járművek betöltésekor')
-    }
+      const { data, error } = await supabase.from('vehicles').select('id, license_plate, model').eq('status', 'active')
+      if (!error && data) setVehicles(data)
+    } catch (error) { console.error(error) }
   }
 
   const loadLocations = async () => {
     try {
-      // Load active locations
-      const { data, error } = await supabase
-        .from('locations')
-        .select('id, name')
-        .eq('status', 'active')
-        .order('name')
-      
-      if (error) {
-        console.error('Database error:', error)
-        toast.error('Hiba a helyszínek betöltésekor')
-        return
-      }
-      
-      if (data) {
-        setLocations(data)
-      }
-    } catch (error) {
-      console.error('Hiba a helyszínek betöltésekor:', error)
-      toast.error('Hiba a helyszínek betöltésekor')
-    }
+      const { data, error } = await supabase.from('locations').select('id, name').eq('status', 'active')
+      if (!error && data) setLocations(data)
+    } catch (error) { console.error(error) }
+  }
+
+  const handlePrint = (note: DeliveryNote) => {
+    const printWindow = window.open('', '_blank');
+    if (!printWindow) return;
+
+    const htmlContent = `
+      <html>
+        <head>
+          <title>SZÁLLÍTÓLEVÉL - ${note.order_number}</title>
+          <style>
+            body { font-family: 'Helvetica', Arial, sans-serif; padding: 40px; color: #1a1a1a; line-height: 1.6; }
+            .header { display: flex; justify-content: space-between; border-bottom: 3px solid #000; padding-bottom: 20px; margin-bottom: 30px; }
+            .company-info h1 { margin: 0; font-size: 28px; font-weight: 900; text-transform: uppercase; }
+            .company-info p { margin: 2px 0; font-size: 13px; color: #444; }
+            .doc-details { text-align: right; }
+            .doc-details h2 { margin: 0; font-size: 24px; color: #2563eb; font-weight: 900; }
+            .box-grid { display: flex; gap: 40px; margin-bottom: 40px; }
+            .box { flex: 1; border: 1px solid #e5e7eb; padding: 25px; border-radius: 15px; background: #f9fafb; }
+            .box h3 { margin: 0 0 15px 0; font-size: 12px; text-transform: uppercase; color: #6b7280; letter-spacing: 1px; border-bottom: 1px solid #e5e7eb; padding-bottom: 5px; }
+            .box p { margin: 4px 0; font-size: 15px; font-weight: 700; }
+            table { width: 100%; border-collapse: collapse; margin: 30px 0; background: white; }
+            th { text-align: left; background: #1f2937; color: white; padding: 14px 18px; font-size: 12px; text-transform: uppercase; letter-spacing: 1px; }
+            td { padding: 14px 18px; border-bottom: 1px solid #e5e7eb; font-size: 15px; }
+            .total { text-align: right; font-size: 20px; font-weight: 900; margin-top: 30px; border-top: 2px solid #000; padding-top: 10px; }
+            .footer-sig { margin-top: 100px; display: flex; justify-content: space-between; gap: 100px; }
+            .sig-box { flex: 1; border-top: 2px solid #000; padding-top: 15px; text-align: center; font-size: 13px; font-weight: 900; text-transform: uppercase; }
+            @media print { .no-print { display: none; } body { padding: 20px; } }
+          </style>
+        </head>
+        <body>
+          <div class="header">
+            <div class="company-info">
+              <h1>Szemesi Pékség Kft.</h1>
+              <p>8636 Balatonszemes, Fő utca 1.</p>
+              <p>Adószám: 12345678-2-42 | Tel: +36 30 123 4567</p>
+            </div>
+            <div class="doc-details">
+              <h2>SZÁLLÍTÓLEVÉL</h2>
+              <p>Sorszám: <strong>${note.order_number}</strong></p>
+              <p>Dátum: ${new Date(note.created_at).toLocaleDateString('hu-HU')}</p>
+            </div>
+          </div>
+
+          <div class="box-grid">
+            <div class="box">
+              <h3>Eladó / Szállító</h3>
+              <p>Szemesi Pékség Kft.</p>
+              <p>Központi Sütőüzem</p>
+              <p>8636 Balatonszemes</p>
+            </div>
+            <div class="box">
+              <h3>Vevő / Átvevő</h3>
+              <p>${note.customer_name}</p>
+              <p>${note.customer_address || 'Helyszíni átvétel'}</p>
+            </div>
+          </div>
+
+          <table>
+            <thead>
+              <tr>
+                <th>Megnevezés</th>
+                <th style="text-align: right;">Mennyiség</th>
+                <th style="text-align: center;">Egység</th>
+                <th>Megjegyzés</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${note.items?.map((item: any) => `
+                <tr>
+                  <td style="font-weight: bold;">${item.name}</td>
+                  <td style="text-align: right; font-weight: 900;">${item.quantity}</td>
+                  <td style="text-align: center;">${item.unit || 'db'}</td>
+                  <td style="font-size: 12px; color: #666;">${note.production_batches ? 'Gyártás: ' + note.production_batches.batch_number : ''}</td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+
+          <div class="footer-sig">
+            <div class="sig-box">Kiadó (Pékség képviseletében)</div>
+            <div class="sig-box">Átvevő (Vevő vagy Szállító)</div>
+          </div>
+
+          <div style="margin-top: 50px; font-size: 10px; color: #999; text-align: center;">
+            Ez a bizonylat az AI Bakery Pro rendszerrel készült.
+          </div>
+
+          <script>
+            window.onload = function() { window.print(); setTimeout(function() { window.close(); }, 500); }
+          </script>
+        </body>
+      </html>
+    `;
+
+    printWindow.document.write(htmlContent);
+    printWindow.document.close();
   }
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    
     try {
       setLoading(true)
+      if (!formData.customer_name) return toast.error('Ügyfél neve kötelező!')
       
-      // Validate required fields
-      if (!formData.customer_name) {
-        toast.error('Kérjük adja meg az ügyfél nevét')
-        return
-      }
-      
-      // Get order details if order_id is provided
-      let orderDetails = null
-      if (formData.order_id) {
-        const { data, error } = await supabase
-          .from('orders')
-          .select('*')
-          .eq('id', formData.order_id)
-          .single()
-        
-        if (error) {
-          console.error('Error fetching order details:', error)
-        } else {
-          orderDetails = data
-        }
-      }
-      
-      // Get batch details if batch_id is provided
-      let batchDetails = null
-      if (formData.batch_id) {
-        const { data, error } = await supabase
-          .from('production_batches')
-          .select(`
-            *,
-            products:recipe_id (name)
-          `)
-          .eq('id', formData.batch_id)
-          .single()
-        
-        if (error) {
-          console.error('Error fetching batch details:', error)
-        } else {
-          batchDetails = data
-        }
-      }
-      
-      // Prepare items array
       let items = []
-      
-      if (orderDetails && orderDetails.items) {
-        // Use items from order
-        items = orderDetails.items
-      } else if (batchDetails) {
-        // Create item from batch
-        items = [{
-          id: batchDetails.recipe_id,
-          name: batchDetails.products?.name || 'Ismeretlen termék',
-          quantity: batchDetails.batch_size,
-          price: 0
-        }]
+      let orderNumber = `DN-${Date.now().toString().slice(-6)}`
+
+      if (formData.order_id) {
+        const order = orders.find(o => o.id === formData.order_id)
+        if (order) { items = order.items; orderNumber = order.order_number; }
+      } else if (formData.batch_id) {
+        const batch = batches.find(b => b.id === formData.batch_id)
+        if (batch) {
+          items = [{
+            id: batch.recipe_id,
+            name: (batch as any).products?.name || 'Termék',
+            quantity: batch.batch_size,
+            unit: 'db'
+          }]
+        }
       }
       
-      // Generate order number if not from an existing order
-      const orderNumber = orderDetails ? orderDetails.order_number : `DN-${Date.now().toString().slice(-6)}`
-      
-      // Create delivery note data
-      const deliveryNoteData = {
+      const { data, error } = await supabase.from('delivery_notes').insert({
         order_id: formData.order_id || null,
         order_number: orderNumber,
         batch_id: formData.batch_id || null,
@@ -340,692 +326,359 @@ export default function DeliveryNotes() {
         driver_id: formData.driver_id || null,
         vehicle_id: formData.vehicle_id || null,
         customer_name: formData.customer_name,
-        customer_address: formData.customer_address || null,
+        customer_address: formData.customer_address,
         items,
-        delivery_date: formData.delivery_date ? new Date(formData.delivery_date).toISOString() : null,
-        notes: formData.notes || null,
+        delivery_date: formData.delivery_date,
+        notes: formData.notes,
         location_id: formData.location_id || null
-      }
+      }).select().single()
       
-      // Insert into database
-      const { data, error } = await supabase
-        .from('delivery_notes')
-        .insert(deliveryNoteData)
-        .select()
-      
-      if (error) {
-        console.error('Database error:', error)
-        toast.error('Hiba a szállítólevél létrehozásakor')
-        return
-      }
-      
-      toast.success('Szállítólevél sikeresen létrehozva!')
-      setShowAddModal(false)
-      resetForm()
-      loadDeliveryNotes()
-    } catch (error) {
-      console.error('Hiba a szállítólevél létrehozásakor:', error)
-      toast.error('Hiba a szállítólevél létrehozásakor')
+      if (error) throw error
+      toast.success('Szállítólevél sikeresen rögzítve!')
+      setShowAddModal(false); resetForm(); loadDeliveryNotes();
+      handlePrint(data)
+    } catch (error: any) {
+      toast.error('Hiba a mentéskor: ' + error.message)
     } finally {
       setLoading(false)
     }
   }
 
+  const handleUpdateStatus = async (id: string, status: string) => {
+    try {
+      // FIX: Csak a státuszt küldjük, semmi join-olt adatot
+      const { error } = await supabase
+        .from('delivery_notes')
+        .update({ status: status })
+        .eq('id', id)
+      
+      if (error) throw error
+      toast.success(`Állapot frissítve: ${status}`)
+      loadDeliveryNotes()
+    } catch (e: any) {
+      console.error(e)
+      toast.error('PATCH hiba: Az adatbázis elutasította a módosítást.')
+    }
+  }
+
+  const handleAssignDriver = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedNote) return;
+    try {
+      const { error } = await supabase
+        .from('delivery_notes')
+        .update({ 
+          driver_id: formData.driver_id, 
+          vehicle_id: formData.vehicle_id 
+        })
+        .eq('id', selectedNote.id);
+      
+      if (error) throw error;
+      toast.success('Sofőr és jármű rögzítve!');
+      setShowAssignModal(false);
+      loadDeliveryNotes();
+    } catch (e) { toast.error('Hiba a hozzárendelésnél'); }
+  }
+
   const resetForm = () => {
     setFormData({
-      order_id: '',
-      batch_id: '',
-      driver_id: '',
-      vehicle_id: '',
-      customer_name: '',
-      customer_address: '',
-      delivery_date: '',
-      notes: '',
-      location_id: ''
+      order_id: '', batch_id: '', driver_id: '', vehicle_id: '',
+      customer_name: '', customer_address: '', delivery_date: new Date().toISOString().split('T')[0],
+      notes: '', location_id: ''
     })
-  }
-
-  const handleOrderChange = async (orderId: string) => {
-    if (!orderId) {
-      setFormData(prev => ({
-        ...prev,
-        order_id: '',
-        customer_name: '',
-        customer_address: ''
-      }))
-      return
-    }
-    
-    try {
-      // Get order details
-      const { data, error } = await supabase
-        .from('orders')
-        .select('*')
-        .eq('id', orderId)
-        .single()
-      
-      if (error) {
-        console.error('Error fetching order details:', error)
-        toast.error('Hiba a rendelés adatainak betöltésekor')
-        return
-      }
-      
-      if (data) {
-        setFormData(prev => ({
-          ...prev,
-          order_id: orderId,
-          customer_name: data.customer_name || '',
-          customer_address: data.customer_address || data.delivery_address || '',
-          location_id: data.location_id || prev.location_id
-        }))
-      }
-    } catch (error) {
-      console.error('Hiba a rendelés adatainak betöltésekor:', error)
-      toast.error('Hiba a rendelés adatainak betöltésekor')
-    }
-  }
-
-  const handleBatchChange = async (batchId: string) => {
-    if (!batchId) {
-      return
-    }
-    
-    try {
-      // Get batch details
-      const { data, error } = await supabase
-        .from('production_batches')
-        .select(`
-          *,
-          products:recipe_id (name)
-        `)
-        .eq('id', batchId)
-        .single()
-      
-      if (error) {
-        console.error('Error fetching batch details:', error)
-        toast.error('Hiba a gyártási tétel adatainak betöltésekor')
-        return
-      }
-      
-      if (data) {
-        // If batch has a webshop_order_id, try to find the corresponding order
-        if (data.webshop_order_id) {
-          const { data: orderData, error: orderError } = await supabase
-            .from('orders')
-            .select('*')
-            .eq('order_number', data.webshop_order_id)
-            .maybeSingle()
-          
-          if (!orderError && orderData) {
-            setFormData(prev => ({
-              ...prev,
-              batch_id: batchId,
-              order_id: orderData.id,
-              customer_name: orderData.customer_name || '',
-              customer_address: orderData.customer_address || orderData.delivery_address || '',
-              location_id: orderData.location_id || data.location_id || prev.location_id
-            }))
-            return
-          }
-        }
-        
-        // If no order found, just update with batch info
-        setFormData(prev => ({
-          ...prev,
-          batch_id: batchId,
-          location_id: data.location_id || prev.location_id
-        }))
-      }
-    } catch (error) {
-      console.error('Hiba a gyártási tétel adatainak betöltésekor:', error)
-      toast.error('Hiba a gyártási tétel adatainak betöltésekor')
-    }
-  }
-
-  const handleDelete = async (id: string) => {
-    if (!confirm('Biztosan törölni szeretné ezt a szállítólevelet?')) return
-    
-    try {
-      const { error } = await supabase
-        .from('delivery_notes')
-        .delete()
-        .eq('id', id)
-      
-      if (error) {
-        console.error('Database error:', error)
-        toast.error('Hiba a szállítólevél törlésekor')
-        return
-      }
-      
-      toast.success('Szállítólevél sikeresen törölve!')
-      loadDeliveryNotes()
-    } catch (error) {
-      console.error('Hiba a szállítólevél törlésekor:', error)
-      toast.error('Hiba a szállítólevél törlésekor')
-    }
-  }
-
-  const handleUpdateStatus = async (id: string, status: DeliveryNote['status']) => {
-    try {
-      const { error } = await supabase
-        .from('delivery_notes')
-        .update({ status })
-        .eq('id', id)
-      
-      if (error) {
-        console.error('Database error:', error)
-        toast.error('Hiba a szállítólevél állapotának frissítésekor')
-        return
-      }
-      
-      toast.success(`Szállítólevél állapota frissítve: ${status}`)
-      loadDeliveryNotes()
-    } catch (error) {
-      console.error('Hiba a szállítólevél állapotának frissítésekor:', error)
-      toast.error('Hiba a szállítólevél állapotának frissítésekor')
-    }
-  }
-
-  const handlePrint = (note: DeliveryNote) => {
-    // In a real app, this would generate a PDF and print it
-    toast.success('Szállítólevél nyomtatása folyamatban...')
   }
 
   const getStatusColor = (status: string) => {
     switch (status) {
-      case 'pending': return 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/20 dark:text-yellow-400'
-      case 'in_progress': return 'bg-blue-100 text-blue-800 dark:bg-blue-900/20 dark:text-blue-400'
-      case 'delivered': return 'bg-green-100 text-green-800 dark:bg-green-900/20 dark:text-green-400'
-      case 'cancelled': return 'bg-red-100 text-red-800 dark:bg-red-900/20 dark:text-red-400'
-      default: return 'bg-gray-100 text-gray-800 dark:bg-gray-900/20 dark:text-gray-400'
+      case 'pending': return 'bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400'
+      case 'in_transit': return 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400'
+      case 'delivered': return 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400'
+      case 'cancelled': return 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400'
+      default: return 'bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-400'
     }
   }
 
-  const getStatusText = (status: string) => {
-    switch (status) {
-      case 'pending': return 'Függőben'
-      case 'in_progress': return 'Folyamatban'
-      case 'delivered': return 'Kiszállítva'
-      case 'cancelled': return 'Törölve'
-      default: return status
-    }
-  }
-
-  const filteredNotes = deliveryNotes.filter(note => {
-    const matchesSearch = 
-      note.order_number.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      note.customer_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      (note.customer_address && note.customer_address.toLowerCase().includes(searchTerm.toLowerCase()))
-    
-    const matchesStatus = statusFilter === 'all' || note.status === statusFilter
-    
-    return matchesSearch && matchesStatus
-  })
+  const filteredNotes = deliveryNotes.filter(note => 
+    note.order_number.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    note.customer_name.toLowerCase().includes(searchTerm.toLowerCase())
+  )
 
   return (
-    <div className="space-y-6">
-      {/* Header */}
-      <div className="flex justify-between items-center">
+    <div className="p-6 space-y-6 bg-gray-950 min-h-screen text-white font-sans">
+      {/* Header UI */}
+      <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-6 border-b border-gray-800 pb-8">
         <div>
-          <h1 className="text-3xl font-bold text-gray-900 dark:text-white flex items-center">
-            <FileText className="h-8 w-8 mr-3 text-blue-600" />
-            Szállítólevelek
+          <h1 className="text-4xl font-black flex items-center tracking-tighter uppercase text-blue-500">
+            <Truck className="h-10 w-10 mr-4" /> SZÁLLÍTÓLEVELEK
           </h1>
-          <p className="mt-2 text-gray-600 dark:text-gray-400">
-            Szállítólevelek kezelése és nyomon követése
-          </p>
+          <p className="text-gray-500 font-bold mt-1 uppercase tracking-widest text-xs">Logisztikai irányítóközpont</p>
         </div>
-        <div className="flex space-x-3">
-          <button
-            onClick={loadDeliveryNotes}
-            className="inline-flex items-center px-4 py-2 border border-gray-300 dark:border-gray-600 text-sm font-medium rounded-xl text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-800 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
-          >
-            <RefreshCw className="h-5 w-5 mr-2" />
-            Frissítés
+        <div className="flex flex-wrap gap-3">
+          <button onClick={loadDeliveryNotes} className="bg-gray-900 p-3 rounded-2xl border border-gray-800 hover:bg-gray-800 transition-all shadow-lg">
+            <RefreshCw className={loading ? 'animate-spin' : ''} />
           </button>
-          <button
-            onClick={() => setShowAddModal(true)}
-            className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-xl text-white bg-gradient-to-r from-blue-500 to-cyan-600 hover:from-blue-600 hover:to-cyan-700 transition-all duration-200 shadow-lg shadow-blue-500/25"
-          >
-            <Plus className="h-5 w-5 mr-2" />
-            Új szállítólevél
+          <button onClick={() => navigate('/route-optimization')} className="bg-gray-900 px-6 py-3 rounded-2xl border border-gray-800 font-black flex items-center gap-2 hover:bg-gray-800 transition-all text-xs tracking-widest uppercase">
+            <Navigation size={18} className="text-blue-500" /> Útvonal optimalizálás
+          </button>
+          <button onClick={() => setShowAddModal(true)} className="bg-blue-600 text-white px-8 py-3 rounded-2xl font-black shadow-[0_0_30px_rgba(37,99,235,0.3)] hover:bg-blue-500 flex items-center gap-2 transition-all uppercase tracking-tighter text-sm">
+            <Plus size={24} /> ÚJ BIZONYLAT
           </button>
         </div>
       </div>
 
       {/* Filters */}
-      <div className="bg-white dark:bg-gray-800 rounded-2xl p-6 shadow-sm border border-gray-200 dark:border-gray-700">
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <div>
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-              Keresés
-            </label>
-            <div className="relative">
-              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-5 w-5 text-gray-400" />
-              <input
-                type="text"
-                placeholder="Szállítólevél száma, ügyfél neve vagy címe..."
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-                className="pl-10 w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-              />
-            </div>
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-              Állapot
-            </label>
-            <select
-              value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-            >
-              <option value="all">Összes állapot</option>
-              <option value="pending">Függőben</option>
-              <option value="in_progress">Folyamatban</option>
-              <option value="delivered">Kiszállítva</option>
-              <option value="cancelled">Törölve</option>
-            </select>
-          </div>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 bg-gray-900/50 p-6 rounded-[2.5rem] border border-gray-800">
+        <div className="relative">
+          <Search className="absolute left-5 top-1/2 -translate-y-1/2 text-gray-500" size={20} />
+          <input 
+            type="text" 
+            placeholder="Keresés ügyfél, cím vagy bizonylatszám alapján..." 
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            className="w-full pl-14 pr-4 py-4 bg-gray-800 border-none rounded-2xl text-white font-medium focus:ring-2 focus:ring-blue-500"
+          />
+        </div>
+        <div className="flex gap-3">
+           <select 
+             value={statusFilter} 
+             onChange={(e) => setStatusFilter(e.target.value)}
+             className="flex-1 bg-gray-800 border-none rounded-2xl px-6 py-4 text-white font-bold outline-none appearance-none"
+           >
+             <option value="all">MINDEN ÁLLAPOT</option>
+             <option value="pending">VÁRAKOZÓ</option>
+             <option value="in_transit">SZÁLLÍTÁS ALATT</option>
+             <option value="delivered">KISZÁLLÍTVA</option>
+           </select>
+           <button className="p-4 bg-gray-800 rounded-2xl text-gray-400 hover:text-white transition-all"><Filter/></button>
         </div>
       </div>
 
-      {/* Delivery Notes Table */}
-      <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-sm border border-gray-200 dark:border-gray-700 overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
-            <thead className="bg-gray-50 dark:bg-gray-900">
-              <tr>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
-                  Szállítólevél
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
-                  Ügyfél
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
-                  Állapot
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
-                  Dátum
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
-                  Sofőr
-                </th>
-                <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
-                  Műveletek
-                </th>
-              </tr>
-            </thead>
-            <tbody className="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
-              {loading ? (
-                <tr>
-                  <td colSpan={6} className="px-6 py-4 text-center">
-                    <div className="flex justify-center">
-                      <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-blue-600"></div>
+      {/* Grid List */}
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-8">
+        {loading ? (
+          <div className="col-span-full py-20 text-center uppercase font-black animate-pulse text-gray-600 tracking-[0.3em]">Adatok letöltése az adatbázisból...</div>
+        ) : filteredNotes.length === 0 ? (
+          <div className="col-span-full py-32 text-center bg-gray-900/20 rounded-[3rem] border-2 border-dashed border-gray-800 text-gray-700 font-black uppercase tracking-widest">Nincsenek aktív kiszállítások</div>
+        ) : (
+          filteredNotes.map((note) => (
+            <div key={note.id} className="bg-gray-900 border border-gray-800 rounded-[3rem] p-8 hover:border-blue-500 transition-all group relative overflow-hidden shadow-2xl flex flex-col justify-between h-full">
+              <div className="absolute top-0 right-0 p-8 opacity-[0.03] pointer-events-none group-hover:opacity-[0.07] transition-all"><FileText size={150} /></div>
+              
+              <div className="relative">
+                <div className="flex justify-between items-start mb-8">
+                  <div>
+                    <h3 className="text-3xl font-black text-white group-hover:text-blue-400 transition-colors tracking-tighter uppercase">{note.order_number}</h3>
+                    <div className="flex items-center gap-2 mt-2">
+                        <Calendar size={14} className="text-gray-600"/>
+                        <p className="text-[10px] text-gray-500 uppercase font-black tracking-widest">{new Date(note.created_at).toLocaleString('hu-HU')}</p>
                     </div>
-                  </td>
-                </tr>
-              ) : filteredNotes.length === 0 ? (
-                <tr>
-                  <td colSpan={6} className="px-6 py-4 text-center text-gray-500 dark:text-gray-400">
-                    Nincsenek szállítólevelek
-                  </td>
-                </tr>
-              ) : (
-                filteredNotes.map((note) => (
-                  <tr key={note.id} className="hover:bg-gray-50 dark:hover:bg-gray-700">
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <div className="text-sm font-medium text-gray-900 dark:text-white">
-                        {note.order_number}
-                      </div>
-                      <div className="text-xs text-gray-500 dark:text-gray-400">
-                        {new Date(note.created_at).toLocaleDateString('hu-HU')}
-                      </div>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <div className="text-sm text-gray-900 dark:text-white">
-                        {note.customer_name}
-                      </div>
-                      <div className="text-xs text-gray-500 dark:text-gray-400">
-                        {note.customer_address || 'Nincs cím megadva'}
-                      </div>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${getStatusColor(note.status)}`}>
-                        {getStatusText(note.status)}
-                      </span>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-white">
-                      {note.delivery_date ? new Date(note.delivery_date).toLocaleDateString('hu-HU') : 'Nincs megadva'}
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-white">
-                      {note.driver_id ? 'Sofőr neve' : 'Nincs megadva'}
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                      <div className="flex justify-end space-x-2">
-                        <button
-                          onClick={() => {
-                            setSelectedNote(note)
-                            setShowViewModal(true)
-                          }}
-                          className="text-blue-600 hover:text-blue-900 dark:text-blue-400 dark:hover:text-blue-300"
-                          title="Megtekintés"
-                        >
-                          <Eye className="h-4 w-4" />
-                        </button>
-                        <button
-                          onClick={() => handlePrint(note)}
-                          className="text-green-600 hover:text-green-900 dark:text-green-400 dark:hover:text-green-300"
-                          title="Nyomtatás"
-                        >
-                          <Download className="h-4 w-4" />
-                        </button>
-                        {note.status === 'pending' && (
-                          <button
-                            onClick={() => handleUpdateStatus(note.id, 'in_progress')}
-                            className="text-blue-600 hover:text-blue-900 dark:text-blue-400 dark:hover:text-blue-300"
-                            title="Kiszállítás indítása"
-                          >
-                            <Truck className="h-4 w-4" />
-                          </button>
-                        )}
-                        {note.status === 'in_progress' && (
-                          <button
-                            onClick={() => handleUpdateStatus(note.id, 'delivered')}
-                            className="text-green-600 hover:text-green-900 dark:text-green-400 dark:hover:text-green-300"
-                            title="Kiszállítva"
-                          >
-                            <CheckCircle className="h-4 w-4" />
-                          </button>
-                        )}
-                        {note.status !== 'delivered' && note.status !== 'cancelled' && (
-                          <button
-                            onClick={() => handleDelete(note.id)}
-                            className="text-red-600 hover:text-red-900 dark:text-red-400 dark:hover:text-red-300"
-                            title="Törlés"
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </button>
-                        )}
-                      </div>
-                    </td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
-      </div>
+                  </div>
+                  <span className={`px-5 py-1.5 rounded-full text-[10px] font-black uppercase tracking-widest shadow-lg ${getStatusColor(note.status)}`}>
+                    {note.status === 'pending' ? 'Várakozik' : note.status === 'in_transit' ? 'Úton' : 'Kész'}
+                  </span>
+                </div>
 
-      {/* Add Modal */}
-      {showAddModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white dark:bg-gray-800 rounded-lg max-w-2xl w-full max-h-[90vh] overflow-y-auto">
-            <div className="p-6">
-              <div className="flex justify-between items-center mb-6">
-                <h2 className="text-xl font-bold text-gray-900 dark:text-white">
-                  Új szállítólevél
-                </h2>
-                <button
-                  onClick={() => setShowAddModal(false)}
-                  className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
-                >
-                  <X className="h-6 w-6" />
-                </button>
+                <div className="space-y-5 mb-10">
+                  <div className="flex items-start gap-4">
+                    <div className="p-3 bg-blue-500/10 rounded-2xl"><User size={18} className="text-blue-500"/></div>
+                    <div>
+                        <p className="text-[10px] text-gray-600 uppercase font-black tracking-widest mb-1">Ügyfél neve</p>
+                        <p className="text-lg font-bold text-gray-100">{note.customer_name}</p>
+                    </div>
+                  </div>
+                  <div className="flex items-start gap-4">
+                    <div className="p-3 bg-amber-500/10 rounded-2xl"><MapPin size={18} className="text-amber-500"/></div>
+                    <div>
+                        <p className="text-[10px] text-gray-600 uppercase font-black tracking-widest mb-1">Kiszállítási cím</p>
+                        <p className="text-sm text-gray-400 font-medium leading-snug">{note.customer_address || 'Telephelyi átvétel'}</p>
+                    </div>
+                  </div>
+                  <div className="flex items-start gap-4 pt-4 border-t border-gray-800">
+                    <div className="p-3 bg-purple-500/10 rounded-2xl"><UserCheck size={18} className="text-purple-500"/></div>
+                    <div>
+                        <p className="text-[10px] text-gray-600 uppercase font-black tracking-widest mb-1">Hozzárendelt sofőr</p>
+                        <p className={`text-xs font-black uppercase ${note.driver_profile?.full_name ? 'text-blue-400' : 'text-red-500/50 italic'}`}>
+                          {note.driver_profile?.full_name || 'NINCS KIJELÖLVE'}
+                        </p>
+                    </div>
+                  </div>
+                </div>
               </div>
 
-              <form onSubmit={handleSubmit} className="space-y-4">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                      Rendelés
-                    </label>
-                    <select
-                      value={formData.order_id}
-                      onChange={(e) => handleOrderChange(e.target.value)}
-                      className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-blue-500 focus:border-blue-500 bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                    >
-                      <option value="">Válasszon rendelést</option>
-                      {orders.map(order => (
-                        <option key={order.id} value={order.id}>
-                          {order.order_number} - {order.customer_name}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                  
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                      Gyártási tétel
-                    </label>
-                    <select
-                      value={formData.batch_id}
-                      onChange={(e) => handleBatchChange(e.target.value)}
-                      className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-blue-500 focus:border-blue-500 bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                    >
-                      <option value="">Válasszon gyártási tételt</option>
-                      {batches.map(batch => (
-                        <option key={batch.id} value={batch.id}>
-                          {batch.batch_number} - {batch.products?.name || 'Ismeretlen termék'} ({batch.batch_size} db)
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                  
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                      Ügyfél neve *
-                    </label>
-                    <input
-                      type="text"
-                      value={formData.customer_name}
-                      onChange={(e) => setFormData({ ...formData, customer_name: e.target.value })}
-                      className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-blue-500 focus:border-blue-500 bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                      required
-                    />
-                  </div>
-                  
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                      Szállítási cím
-                    </label>
-                    <input
-                      type="text"
-                      value={formData.customer_address}
-                      onChange={(e) => setFormData({ ...formData, customer_address: e.target.value })}
-                      className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-blue-500 focus:border-blue-500 bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                    />
-                  </div>
-                  
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                      Sofőr
-                    </label>
-                    <select
-                      value={formData.driver_id}
-                      onChange={(e) => setFormData({ ...formData, driver_id: e.target.value })}
-                      className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-blue-500 focus:border-blue-500 bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                    >
-                      <option value="">Válasszon sofőrt</option>
-                      {drivers.map(driver => (
-                        <option key={driver.id} value={driver.id}>
-                          {driver.full_name}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                  
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                      Jármű
-                    </label>
-                    <select
-                      value={formData.vehicle_id}
-                      onChange={(e) => setFormData({ ...formData, vehicle_id: e.target.value })}
-                      className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-blue-500 focus:border-blue-500 bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                    >
-                      <option value="">Válasszon járművet</option>
-                      {vehicles.map(vehicle => (
-                        <option key={vehicle.id} value={vehicle.id}>
-                          {vehicle.license_plate} - {vehicle.model}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                  
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                      Helyszín
-                    </label>
-                    <select
-                      value={formData.location_id}
-                      onChange={(e) => setFormData({ ...formData, location_id: e.target.value })}
-                      className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-blue-500 focus:border-blue-500 bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                    >
-                      <option value="">Válasszon helyszínt</option>
-                      {locations.map(location => (
-                        <option key={location.id} value={location.id}>
-                          {location.name}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                  
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                      Szállítási dátum
-                    </label>
-                    <input
-                      type="date"
-                      value={formData.delivery_date}
-                      onChange={(e) => setFormData({ ...formData, delivery_date: e.target.value })}
-                      className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-blue-500 focus:border-blue-500 bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                    />
-                  </div>
-                </div>
-                
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                    Megjegyzések
-                  </label>
-                  <textarea
-                    value={formData.notes}
-                    onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
-                    rows={3}
-                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-blue-500 focus:border-blue-500 bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                  />
+              <div className="space-y-3">
+                <div className="flex gap-2">
+                  <button 
+                    onClick={() => { setSelectedNote(note); setShowViewModal(true); }} 
+                    className="flex-1 bg-gray-800 p-5 rounded-2xl hover:bg-gray-700 font-black text-xs uppercase tracking-widest transition-all border border-gray-700"
+                  >
+                    Részletek
+                  </button>
+                  <button 
+                    onClick={() => handlePrint(note)} 
+                    className="p-5 bg-gray-800 rounded-2xl hover:bg-green-600 text-green-500 hover:text-white border border-gray-700 transition-all shadow-xl"
+                  >
+                    <Printer size={22}/>
+                  </button>
+                  <button 
+                    onClick={() => { setSelectedNote(note); setShowAssignModal(true); }} 
+                    className="p-5 bg-gray-800 rounded-2xl hover:bg-purple-600 text-purple-400 hover:text-white border border-gray-700 transition-all shadow-xl"
+                  >
+                    <UserCheck size={22}/>
+                  </button>
                 </div>
 
-                <div className="flex justify-end space-x-3 mt-6 pt-6 border-t border-gray-200 dark:border-gray-700">
-                  <button
-                    type="button"
-                    onClick={() => setShowAddModal(false)}
-                    className="px-4 py-2 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
+                {note.status === 'pending' && (
+                  <button 
+                    onClick={() => handleUpdateStatus(note.id, 'in_transit')} 
+                    className="w-full bg-blue-600 py-5 rounded-[1.5rem] font-black uppercase text-sm tracking-tighter hover:bg-blue-500 transition-all flex items-center justify-center gap-3 shadow-[0_10px_30px_rgba(37,99,235,0.2)]"
                   >
-                    Mégse
+                    <Navigation size={20} /> SZÁLLÍTÁS MEGKEZDÉSE
                   </button>
-                  <button
-                    type="submit"
-                    disabled={loading}
-                    className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center"
-                  >
-                    <Save className="h-4 w-4 mr-2" />
-                    {loading ? 'Mentés...' : 'Mentés'}
-                  </button>
-                </div>
-              </form>
+                )}
+
+                {note.status === 'in_transit' && (
+                   <div className="flex items-center justify-center gap-3 p-4 bg-blue-500/5 rounded-2xl border border-blue-500/10">
+                      <div className="h-2 w-2 bg-blue-500 rounded-full animate-ping" />
+                      <span className="text-[10px] font-black text-blue-500 uppercase tracking-widest">Kiszállítás folyamatban...</span>
+                   </div>
+                )}
+              </div>
             </div>
+          ))
+        )}
+      </div>
+
+      {/* --- ADD MODAL --- */}
+      {showAddModal && (
+        <div className="fixed inset-0 bg-black/95 z-[1000] flex items-center justify-center p-4 backdrop-blur-xl">
+          <div className="bg-gray-900 border border-gray-800 rounded-[3rem] p-12 w-full max-w-2xl shadow-2xl overflow-y-auto max-h-[90vh]">
+            <div className="flex justify-between items-center mb-12 border-b border-gray-800 pb-8">
+              <h2 className="text-4xl font-black uppercase tracking-tighter">Új Bizonylat</h2>
+              <button onClick={() => setShowAddModal(false)} className="bg-gray-800 p-4 rounded-3xl hover:text-red-500 transition-all text-white"><X size={28}/></button>
+            </div>
+            <form onSubmit={handleSubmit} className="space-y-8">
+              <div className="space-y-4">
+                <p className="text-[10px] font-black text-gray-500 uppercase tracking-widest ml-2">Forrás kiválasztása</p>
+                <select 
+                  onChange={(e) => { 
+                    const b = batches.find(bt => bt.id === e.target.value); 
+                    setFormData({...formData, batch_id: e.target.value, customer_name: b?.products?.name ? 'Gyártás: ' + b.products.name : '' }) 
+                  }} 
+                  className="w-full bg-gray-800 border-none rounded-2xl p-5 text-white font-bold text-lg"
+                >
+                  <option value="">Válasszon kész gyártási fázist...</option>
+                  {batches.map(b => <option key={b.id} value={b.id}>{b.batch_number} - {b.products?.name}</option>)}
+                </select>
+              </div>
+
+              <div className="space-y-6">
+                <p className="text-[10px] font-black text-gray-500 uppercase tracking-widest ml-2">Ügyfél adatai</p>
+                <input required placeholder="Ügyfél neve" value={formData.customer_name} onChange={e => setFormData({...formData, customer_name: e.target.value})} className="w-full bg-gray-800 border-none rounded-2xl p-5 text-white text-xl font-black placeholder:text-gray-700" />
+                <input placeholder="Kiszállítási cím" value={formData.customer_address} onChange={e => setFormData({...formData, customer_address: e.target.value})} className="w-full bg-gray-800 border-none rounded-2xl p-5 text-white font-bold placeholder:text-gray-700" />
+                <input type="date" value={formData.delivery_date} onChange={e => setFormData({...formData, delivery_date: e.target.value})} className="w-full bg-gray-800 border-none rounded-2xl p-5 text-white font-black" />
+              </div>
+
+              <button disabled={loading} type="submit" className="w-full bg-blue-600 py-8 rounded-[2rem] font-black text-2xl hover:bg-blue-500 uppercase tracking-tighter transition-all shadow-[0_20px_50px_rgba(37,99,235,0.3)]">
+                BIZONYLAT RÖGZÍTÉSE ÉS NYOMTATÁSA
+              </button>
+            </form>
           </div>
         </div>
       )}
 
-      {/* View Modal */}
+      {/* --- ASSIGN SOFŐR MODAL --- */}
+      {showAssignModal && selectedNote && (
+        <div className="fixed inset-0 bg-black/95 z-[1100] flex items-center justify-center p-4 backdrop-blur-md">
+           <div className="bg-gray-900 border border-gray-800 rounded-[3rem] p-12 w-full max-w-md shadow-2xl">
+              <h2 className="text-3xl font-black uppercase mb-10 tracking-tighter text-center">Logisztikai Beosztás</h2>
+              <form onSubmit={handleAssignDriver} className="space-y-8">
+                 <div className="space-y-6">
+                    <div className="space-y-2">
+                       <label className="text-[10px] font-black text-gray-500 uppercase ml-2 tracking-widest">Kiszállító Sofőr</label>
+                       <select required value={formData.driver_id} onChange={e => setFormData({...formData, driver_id: e.target.value})} className="w-full bg-gray-800 border-none rounded-2xl p-6 text-white text-lg font-black outline-none focus:ring-2 focus:ring-amber-500 transition-all">
+                          <option value="">Válasszon munkatársat...</option>
+                          {drivers.map(d => <option key={d.id} value={d.id}>{d.full_name}</option>)}
+                       </select>
+                    </div>
+                    <div className="space-y-2">
+                       <label className="text-[10px] font-black text-gray-500 uppercase ml-2 tracking-widest">Gépjármű</label>
+                       <select required value={formData.vehicle_id} onChange={e => setFormData({...formData, vehicle_id: e.target.value})} className="w-full bg-gray-800 border-none rounded-2xl p-6 text-white text-lg font-black outline-none focus:ring-2 focus:ring-amber-500 transition-all">
+                          <option value="">Válasszon rendszámot...</option>
+                          {vehicles.map(v => <option key={v.id} value={v.id}>{v.license_plate} - {v.model}</option>)}
+                       </select>
+                    </div>
+                 </div>
+                 <button type="submit" className="w-full bg-amber-600 text-black py-7 rounded-[2rem] font-black uppercase text-xl hover:bg-amber-500 shadow-xl shadow-amber-600/20 transition-all">BEOSZTÁS MENTÉSE</button>
+                 <button type="button" onClick={() => setShowAssignModal(false)} className="w-full text-gray-500 font-bold uppercase text-xs tracking-widest">Bezárás mentés nélkül</button>
+              </form>
+           </div>
+        </div>
+      )}
+
+      {/* --- VIEW MODAL --- */}
       {showViewModal && selectedNote && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white dark:bg-gray-800 rounded-lg max-w-2xl w-full max-h-[90vh] overflow-y-auto">
-            <div className="p-6">
-              <div className="flex justify-between items-center mb-6">
-                <h2 className="text-xl font-bold text-gray-900 dark:text-white">
-                  Szállítólevél részletei
-                </h2>
-                <button
-                  onClick={() => setShowViewModal(false)}
-                  className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
-                >
-                  <X className="h-6 w-6" />
-                </button>
+        <div className="fixed inset-0 bg-black/98 z-[1000] flex items-center justify-center p-4 backdrop-blur-2xl">
+          <div className="bg-gray-900 border border-gray-800 rounded-[4rem] p-12 w-full max-w-5xl shadow-2xl overflow-y-auto max-h-[95vh]">
+            <div className="flex justify-between items-center mb-12 border-b border-gray-800 pb-8">
+              <div>
+                 <p className="text-blue-500 font-black text-xs uppercase tracking-[0.3em] mb-2">Bizonylat Adatlap</p>
+                 <h2 className="text-5xl font-black uppercase tracking-tighter">{selectedNote.order_number}</h2>
               </div>
-
-              <div className="space-y-4">
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Szállítólevél szám</label>
-                    <p className="text-sm text-gray-900 dark:text-white">{selectedNote.order_number}</p>
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Állapot</label>
-                    <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${getStatusColor(selectedNote.status)}`}>
-                      {getStatusText(selectedNote.status)}
-                    </span>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Ügyfél neve</label>
-                    <p className="text-sm text-gray-900 dark:text-white">{selectedNote.customer_name}</p>
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Szállítási cím</label>
-                    <p className="text-sm text-gray-900 dark:text-white">{selectedNote.customer_address || '-'}</p>
-                  </div>
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Tételek</label>
-                  <div className="border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden">
-                    <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
-                      <thead className="bg-gray-50 dark:bg-gray-900">
-                        <tr>
-                          <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Termék</th>
-                          <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Mennyiség</th>
-                        </tr>
-                      </thead>
-                      <tbody className="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
-                        {selectedNote.items && selectedNote.items.map((item, index) => (
-                          <tr key={index}>
-                            <td className="px-4 py-2 text-sm text-gray-900 dark:text-white">{item.name}</td>
-                            <td className="px-4 py-2 text-sm text-gray-900 dark:text-white">{item.quantity} db</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-
+              <button onClick={() => setShowViewModal(false)} className="bg-gray-800 p-6 rounded-[2rem] text-white hover:text-red-500 transition-all"><X size={40}/></button>
+            </div>
+            
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-12 mb-12">
+              <div className="bg-black/30 p-10 rounded-[3rem] border border-gray-800 shadow-inner">
+                <h4 className="text-[10px] text-gray-600 font-black uppercase mb-8 flex items-center gap-2 tracking-[0.2em]"><User size={14}/> Vevői információk</h4>
+                <p className="text-3xl font-black text-white mb-3">{selectedNote.customer_name}</p>
+                <p className="text-xl text-gray-400 font-medium flex items-center gap-3"><MapPin size={24} className="text-blue-500"/> {selectedNote.customer_address || 'Helyszíni átvétel'}</p>
                 {selectedNote.notes && (
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Megjegyzések</label>
-                    <p className="text-sm text-gray-900 dark:text-white">{selectedNote.notes}</p>
-                  </div>
+                   <div className="mt-8 p-6 bg-amber-500/5 rounded-2xl border border-amber-500/10 italic text-amber-200/70">
+                      "{selectedNote.notes}"
+                   </div>
                 )}
               </div>
-
-              <div className="flex justify-end space-x-3 mt-6 pt-6 border-t border-gray-200 dark:border-gray-700">
-                <button
-                  onClick={() => setShowViewModal(false)}
-                  className="px-4 py-2 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
-                >
-                  Bezárás
-                </button>
-                <button
-                  onClick={() => handlePrint(selectedNote)}
-                  className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors flex items-center"
-                >
-                  <Download className="h-4 w-4 mr-2" />
-                  Nyomtatás
-                </button>
+              <div className="bg-black/30 p-10 rounded-[3rem] border border-gray-800 shadow-inner">
+                <h4 className="text-[10px] text-gray-600 font-black uppercase mb-8 flex items-center gap-2 tracking-[0.2em]"><Truck size={14}/> Logisztikai adatok</h4>
+                <div className="space-y-6">
+                   <div className="flex justify-between items-end border-b border-gray-800 pb-4">
+                      <span className="text-gray-500 text-xs font-black uppercase tracking-widest">Állapot</span>
+                      <span className="text-2xl font-black text-amber-500 uppercase tracking-tighter">{selectedNote.status}</span>
+                   </div>
+                   <div className="flex justify-between items-end border-b border-gray-800 pb-4">
+                      <span className="text-gray-500 text-xs font-black uppercase tracking-widest">Kiszállító</span>
+                      <span className="text-xl font-black text-white uppercase tracking-tighter">{selectedNote.driver_profile?.full_name || 'Nincs sofőr'}</span>
+                   </div>
+                   <div className="flex justify-between items-end border-b border-gray-800 pb-4">
+                      <span className="text-gray-500 text-xs font-black uppercase tracking-widest">Dátum</span>
+                      <span className="text-xl font-black text-white uppercase tracking-tighter">{selectedNote.delivery_date ? new Date(selectedNote.delivery_date).toLocaleDateString('hu-HU') : '-'}</span>
+                   </div>
+                </div>
               </div>
+            </div>
+
+            <div className="bg-gray-800/50 rounded-[3rem] border border-gray-700 overflow-hidden mb-12 shadow-2xl">
+              <table className="w-full text-left">
+                <thead className="bg-gray-800 text-[11px] text-gray-400 uppercase font-black tracking-widest">
+                  <tr><th className="px-10 py-6">Tétel megnevezése</th><th className="px-10 py-6 text-right">Mennyiség</th></tr>
+                </thead>
+                <tbody className="divide-y divide-gray-800">
+                  {selectedNote.items?.map((item: any, i: number) => (
+                    <tr key={i} className="hover:bg-black/20 transition-all">
+                      <td className="px-10 py-7 text-white text-xl font-black flex items-center gap-4"><Package size={24} className="text-gray-600"/> {item.name}</td>
+                      <td className="px-10 py-7 text-right text-white font-black text-3xl tracking-tighter">{item.quantity} {item.unit || 'db'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="flex flex-col md:flex-row gap-6">
+               <button onClick={() => handlePrint(selectedNote)} className="flex-1 bg-green-600 py-8 rounded-[2.5rem] font-black flex items-center justify-center gap-4 text-white text-2xl hover:bg-green-500 transition-all shadow-[0_20px_50px_rgba(34,197,94,0.3)]"><Printer size={32}/> NYOMTATÁS</button>
+               {selectedNote.status === 'pending' && (
+                  <button onClick={() => handleUpdateStatus(selectedNote.id, 'in_transit')} className="flex-1 bg-blue-600 py-8 rounded-[2.5rem] font-black flex items-center justify-center gap-4 text-white text-2xl hover:bg-blue-500 transition-all shadow-[0_20px_50px_rgba(37,99,235,0.3)]"><Navigation size={32}/> SZÁLLÍTÁS INDÍTÁSA</button>
+               )}
+               <button onClick={() => setShowViewModal(false)} className="bg-gray-800 px-16 py-8 rounded-[2.5rem] font-black text-xl text-gray-500 hover:text-white transition-all">BEZÁRÁS</button>
             </div>
           </div>
         </div>

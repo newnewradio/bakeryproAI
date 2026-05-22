@@ -22,6 +22,7 @@ import { supabase } from '../lib/supabase'
 import { toast } from 'react-hot-toast'
 import { gpsTracker } from '../lib/gpsTracking'
 
+
 interface Vehicle {
   id: string
   license_plate: string
