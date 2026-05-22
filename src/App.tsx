@@ -21,6 +21,7 @@ import Fleet from './pages/Fleet'
 import Recipes from './pages/Recipes'
 import Inventory from './pages/Inventory'
 import ProductCodeManager from './pages/ProductCodeManager'
+import ProductPricing from './pages/ProductPricing'
 import EmailSystem from './pages/EmailSystem'
 import Schedules from './pages/Schedules'
 import Reports from './pages/Reports'
@@ -143,6 +144,7 @@ function App() {
                 <Route path="locations" element={<Locations />} />
                 <Route path="email-system" element={<EmailSystem />} />
                 <Route path="product-codes" element={<ProductCodeManager />} />
+                <Route path="product-pricing" element={<ProductPricing />} />
                 <Route path="schedules" element={<Schedules />} />
                 <Route path="reports" element={<Reports />} />
                 <Route path="documents" element={<Documents />} />
