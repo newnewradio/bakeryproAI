@@ -375,31 +375,70 @@ export default function EmailSystem() {
         setSelectedTemplate('')
         loadScheduledEmails()
       } else {
-        // Send emails immediately
+        // ✅ JAVÍTÁS: Valódi email küldés a Supabase Edge Function-ön keresztül SMTP-n
+        if (!emailSettings.smtp_host || !emailSettings.smtp_username || !emailSettings.smtp_password) {
+          toast.error('❌ Hiányzó SMTP beállítások! Töltse ki az email beállításokat (fogaskerék ikon).')
+          return
+        }
+
+        setLoading(true)
+        let successCount = 0
+        let errorCount = 0
+
         for (const partner of selectedPartnerData) {
-          // In a real implementation, this would call an API to send the email
-          // For demo purposes, we'll just simulate sending
-          
-          // Record the sent email
-          const { error } = await supabase
-            .from('sent_emails')
-            .insert({
-              recipient_id: partner.id,
-              recipient_email: partner.email,
-              recipient_name: partner.name,
-              subject: template.subject,
-              body: template.body,
-              status: 'sent'
+          try {
+            // Edge Function hívása - tényleges SMTP küldés
+            const { data: fnData, error: fnError } = await supabase.functions.invoke('send-email', {
+              body: {
+                to: partner.email,
+                subject: template.subject,
+                body: template.body,
+                from: emailSettings.from_email,
+                smtpSettings: {
+                  host: emailSettings.smtp_host,
+                  port: emailSettings.smtp_port,
+                  user: emailSettings.smtp_username,
+                  pass: emailSettings.smtp_password,
+                  fromName: emailSettings.from_name || 'Szemesi Pékség',
+                }
+              }
             })
-          
-          if (error) {
-            console.error('Database error:', error)
-            toast.error(`Hiba az email küldésekor: ${partner.name}`)
-            return
+
+            if (fnError) {
+              console.error(`Edge function hiba (${partner.email}):`, fnError)
+              // Rögzítjük sikertelen küldésként
+              await supabase.from('sent_emails').insert({
+                recipient_id: partner.id,
+                recipient_email: partner.email,
+                recipient_name: partner.name,
+                subject: template.subject,
+                body: template.body,
+                status: 'failed'
+              })
+              errorCount++
+            } else {
+              console.log(`Email elküldve: ${partner.email}`, fnData)
+              // Rögzítjük sikeres küldésként
+              await supabase.from('sent_emails').insert({
+                recipient_id: partner.id,
+                recipient_email: partner.email,
+                recipient_name: partner.name,
+                subject: template.subject,
+                body: template.body,
+                status: 'sent'
+              })
+              successCount++
+            }
+          } catch (err: any) {
+            console.error('Küldési hiba:', err)
+            errorCount++
           }
         }
-        
-        toast.success(`${selectedPartnerData.length} email sikeresen elküldve!`)
+
+        setLoading(false)
+        if (successCount > 0) toast.success(`✅ ${successCount} email sikeresen elküldve!`)
+        if (errorCount > 0) toast.error(`❌ ${errorCount} email küldése sikertelen. Ellenőrizze az SMTP beállításokat!`)
+
         setSelectedPartners([])
         setSelectedTemplate('')
         loadSentEmails()

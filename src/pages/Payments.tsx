@@ -165,63 +165,82 @@ export default function Payments() {
     }
   }
 
-  // JAVÍTOTT FÜGGVÉNY
+  // JAVÍTOTT FÜGGVÉNY – frontend számítás, mert a DB RPC hibás (employee_id helyett user_id van a táblában)
   const calculatePaymentFromWorkLogs = async () => {
     try {
       setLoading(true)
       
       if (!workLogPaymentData.employee_id) {
         toast.error('Válasszon alkalmazottat')
-        setLoading(false); // Fontos: állítsuk le a töltést hiba esetén
+        setLoading(false)
         return
       }
       
-      const { data, error } = await supabase.rpc(
-        'calculate_payment_from_work_logs',
-        {
-          // A biztonság kedvéért mindkét verziót kipróbáljuk, hátha a DB függvény így várja a paramétert
-          employee_id: workLogPaymentData.employee_id,
-          start_date: workLogPaymentData.start_date,
-          end_date: workLogPaymentData.end_date
-        }
-      )
+      // 1. Órabér lekérése a profiles táblából
+      const { data: profileData, error: profileError } = await supabase
+        .from('profiles')
+        .select('id, full_name, hourly_wage')
+        .eq('id', workLogPaymentData.employee_id)
+        .single()
       
-      if (error) {
-        console.error('Database error:', error)
-        toast.error('Hiba a fizetés kiszámításakor. Ellenőrizze az adatbázis-függvényt.')
-        setLoading(false);
+      if (profileError || !profileData) {
+        toast.error('Nem található az alkalmazott profilja')
+        setLoading(false)
         return
       }
-
-      // *** IDE KERÜLT A JAVÍTÁS ***
-      // Kinyerjük a számot a visszakapott adatból.
-      let calculatedAmount = 0;
-      if (typeof data === 'number') {
-        calculatedAmount = data;
-      } else if (data && Array.isArray(data) && data.length > 0 && typeof data[0].total_amount === 'number') {
-        calculatedAmount = data[0].total_amount;
-      } else if (data && typeof data.total_amount === 'number') {
-        calculatedAmount = data.total_amount;
-      } else {
-        toast.error('A fizetés kiszámítása nem adott vissza érvényes összeget.');
-        console.warn('Nem sikerült kinyerni a fizetési összeget a RPC válaszból:', data);
-        setLoading(false);
-        return;
+      
+      const hourlyWage = Number(profileData.hourly_wage) || 0
+      if (hourlyWage === 0) {
+        toast.error('Az alkalmazottnak nincs beállítva órabére (Személyzet → Órabér)')
+        setLoading(false)
+        return
       }
       
+      // 2. Munkaidő naplók lekérése (user_id oszlop, status = 'completed', dátum szűrés)
+      const { data: logsData, error: logsError } = await supabase
+        .from('work_logs')
+        .select('start_time, end_time, status')
+        .eq('user_id', workLogPaymentData.employee_id)
+        .eq('status', 'completed')
+        .gte('start_time', `${workLogPaymentData.start_date}T00:00:00`)
+        .lte('start_time', `${workLogPaymentData.end_date}T23:59:59`)
+        .not('end_time', 'is', null)
+      
+      if (logsError) {
+        console.error('Database error:', logsError)
+        toast.error('Hiba a munkaidő adatok lekérésekor')
+        setLoading(false)
+        return
+      }
+      
+      if (!logsData || logsData.length === 0) {
+        toast.error(`Nem található befejezett munkaidő bejegyzés ${workLogPaymentData.start_date} – ${workLogPaymentData.end_date} között.`)
+        setLoading(false)
+        return
+      }
+      
+      // 3. Összes idő kiszámítása percekben → órákba
+      const totalMinutes = logsData.reduce((sum, log) => {
+        if (!log.end_time) return sum
+        const mins = (new Date(log.end_time).getTime() - new Date(log.start_time).getTime()) / 60000
+        return sum + mins
+      }, 0)
+      const totalHours = totalMinutes / 60
+      const calculatedAmount = Math.round(totalHours * hourlyWage)
+      
+      // 4. Fizetés rekord létrehozása
       const employee = employees.find(e => e.id === workLogPaymentData.employee_id)
-      
       const paymentData = {
         user_id: workLogPaymentData.employee_id,
-        amount: calculatedAmount, // A kinyert, tiszta számot használjuk
+        amount: calculatedAmount,
         currency: 'HUF',
         payment_method: workLogPaymentData.payment_method,
-        description: `${workLogPaymentData.description} (${workLogPaymentData.start_date} - ${workLogPaymentData.end_date})`,
+        description: `${workLogPaymentData.description} – ${totalHours.toFixed(2)} óra × ${hourlyWage.toLocaleString('hu-HU')} Ft/óra (${workLogPaymentData.start_date} – ${workLogPaymentData.end_date})`,
         reference_id: `PAY-${Date.now()}`,
         status: 'pending' as const
       }
       
-      const { data: paymentResult, error: paymentError } = await supabase
+      const { error: paymentError } = await supabase
         .from('payments')
         .insert(paymentData)
         .select()
@@ -229,11 +248,15 @@ export default function Payments() {
       if (paymentError) {
         console.error('Database error:', paymentError)
         toast.error('Hiba a fizetés létrehozásakor.')
-        setLoading(false);
+        setLoading(false)
         return
       }
       
-      toast.success(`Fizetés sikeresen létrehozva ${employee?.full_name || 'alkalmazott'} részére: ${calculatedAmount.toLocaleString('hu-HU')} Ft`)
+      toast.success(
+        `✅ Fizetés létrehozva: ${employee?.full_name || profileData.full_name} – ` +
+        `${totalHours.toFixed(2)} óra × ${hourlyWage.toLocaleString('hu-HU')} Ft = ${calculatedAmount.toLocaleString('hu-HU')} Ft`,
+        { duration: 5000 }
+      )
       setShowWorkLogPaymentModal(false)
       loadPayments()
     } catch (err) {

@@ -35,7 +35,11 @@ import {
   Monitor,
   ChevronLeft,
   ChevronRight,
-  Mail
+  Mail,
+  Play,
+  Pause,
+  Square,
+  Timer
 } from 'lucide-react'
 import { MessageSquare } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
@@ -51,11 +55,107 @@ export default function Layout() {
   const [showNotifications, setShowNotifications] = useState(false)
   const [unreadNotifications, setUnreadNotifications] = useState(0)
   const [profile, setProfile] = useState<any>(null)
+  
+  // MUNKAIDŐ ÁLLAPOTOK
+  const [workStatus, setWorkStatus] = useState<'idle' | 'running'>('idle')
+  const [workSeconds, setWorkSeconds] = useState(0)
+  const [activeLogId, setActiveWorkLogId] = useState<string | null>(null)
+
   const { user, signOut } = useAuth()
   const { role } = useRole()
   const { theme, toggleTheme } = useTheme()
   const location = useLocation()
   const navigate = useNavigate()
+
+  // AKTÍV MUNKAIDŐ BETÖLTÉSE (F5 ELLENI VÉDELEM)
+  useEffect(() => {
+    const fetchActiveWorkLog = async () => {
+      if (!user?.id) return;
+      
+      try {
+        const { data, error } = await supabase
+          .from('work_logs')
+          .select('*')
+          .eq('user_id', user.id)
+          .eq('status', 'running')
+          .maybeSingle();
+
+        if (error) {
+          console.error('Munkaidő lekérdezési hiba:', error);
+          return;
+        }
+
+        if (data) {
+          setActiveWorkLogId(data.id);
+          setWorkStatus('running');
+          // Idő kiszámítása a szerver start_time alapján
+          const start = new Date(data.start_time).getTime();
+          const now = new Date().getTime();
+          setWorkSeconds(Math.floor((now - start) / 1000));
+        }
+      } catch (err) {
+        console.error('Hálózat hiba:', err);
+      }
+    };
+
+    fetchActiveWorkLog();
+  }, [user]);
+
+  // SZÁMLÁLÓ LÉPTETÉSE
+  useEffect(() => {
+    let interval: any;
+    if (workStatus === 'running') {
+      interval = setInterval(() => {
+        setWorkSeconds(prev => prev + 1);
+      }, 1000);
+    }
+    return () => clearInterval(interval);
+  }, [workStatus]);
+
+  // IDŐ FORMÁZÁSA (HH:MM:SS)
+  const formatTime = (totalSeconds: number) => {
+    const hrs = Math.floor(totalSeconds / 3600);
+    const mins = Math.floor((totalSeconds % 3600) / 60);
+    const secs = totalSeconds % 60;
+    return `${hrs.toString().padStart(2, '0')}:${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+  };
+
+  // MUNKAIDŐ GOMBOK KEZELÉSE
+  const handleWorkAction = async (action: 'start' | 'stop') => {
+    if (!user?.id) return;
+
+    try {
+      if (action === 'start') {
+        const { data, error } = await supabase
+          .from('work_logs')
+          .insert([{ user_id: user.id, status: 'running' }])
+          .select()
+          .single();
+        
+        if (error) throw error;
+        setActiveWorkLogId(data.id);
+        setWorkStatus('running');
+        toast.success('Munkaidő elindítva');
+      } 
+      else if (action === 'stop') {
+        if (!activeLogId) return;
+        if (!confirm('Leállítod a munkaidő mérést?')) return;
+
+        const { error } = await supabase
+          .from('work_logs')
+          .update({ status: 'completed', end_time: new Date().toISOString() })
+          .eq('id', activeLogId);
+
+        if (error) throw error;
+        setWorkStatus('idle');
+        setWorkSeconds(0);
+        setActiveWorkLogId(null);
+        toast.error('Munkaidő leállítva és mentve');
+      }
+    } catch (err: any) {
+      toast.error('Adatbázis hiba: ' + err.message);
+    }
+  };
 
   useEffect(() => {
     // Close sidebar on mobile when route changes
@@ -109,10 +209,12 @@ export default function Layout() {
     { path: '/recipes', label: 'Receptek', icon: ChefHat, roles: ['admin', 'baker', 'salesperson'], group: 'production' },
     { path: '/inventory', label: 'Készlet', icon: Package, roles: ['admin', 'baker', 'salesperson'], group: 'production' },
     { path: '/product-codes', label: 'Termék kódok', icon: Tag, roles: ['admin', 'baker', 'salesperson'], group: 'production' },
+    { path: '/product-pricing', label: 'Egyedi árak', icon: Tag, roles: ['admin'], group: 'production' },
     { path: '/email-system', label: 'Email rendszer', icon: Mail, roles: ['admin'], group: 'sales' },
     
     // Értékesítés
     { path: '/orders', label: 'Rendelések', icon: ShoppingCart, roles: ['admin', 'baker', 'salesperson'], group: 'sales' },
+    { path: '/store-order', label: 'Bolti rendelés', icon: ShoppingCart, roles: ['admin', 'salesperson'], group: 'sales' },
     { path: '/cashmatic', label: 'Cashmatic', icon: Coins, roles: ['admin', 'salesperson'], group: 'sales' },
     { path: '/partners', label: 'Partnerek', icon: Building, roles: ['admin', 'salesperson'], group: 'sales' },
     { path: '/delivery-notes', label: 'Szállítólevelek', icon: FileText, roles: ['admin', 'driver'], group: 'sales' },
@@ -317,7 +419,41 @@ export default function Layout() {
                   </h1>
                 </div>
               </div>
-              <div className="flex items-center">
+              <div className="flex items-center space-x-2">
+                
+                {/* MUNKAIDŐ VEZÉRLŐ PANEL */}
+                <div className="hidden md:flex items-center bg-gray-100 dark:bg-gray-700 rounded-full px-3 py-1 mr-2 border border-gray-200 dark:border-gray-600">
+                  <div className={`h-2 w-2 rounded-full mr-3 ${workStatus === 'running' ? 'bg-green-500 animate-pulse' : 'bg-gray-400'}`} />
+                  <span className="text-xs font-mono font-bold text-gray-700 dark:text-gray-200 mr-4">
+                    {formatTime(workSeconds)}
+                  </span>
+                  <div className="flex space-x-1">
+                    {workStatus !== 'running' ? (
+                      <button 
+                        onClick={() => handleWorkAction('start')} 
+                        className="p-1.5 hover:bg-green-100 text-green-600 rounded-full transition-colors" 
+                        title="Indítás"
+                      >
+                        <Play className="h-4 w-4 fill-current" />
+                      </button>
+                    ) : (
+                      <button 
+                        disabled 
+                        className="p-1.5 text-gray-300 rounded-full cursor-not-allowed"
+                      >
+                        <Play className="h-4 w-4 fill-current opacity-50" />
+                      </button>
+                    )}
+                    <button 
+                      onClick={() => handleWorkAction('stop')} 
+                      className="p-1.5 hover:bg-red-100 text-red-600 rounded-full transition-colors" 
+                      title="Leállítás"
+                    >
+                      <Square className="h-4 w-4 fill-current" />
+                    </button>
+                  </div>
+                </div>
+
                 <button
                   type="button"
                   onClick={() => setShowNotifications(true)}
@@ -346,7 +482,7 @@ export default function Layout() {
                       onClick={() => navigate('/profile')}
                     >
                       <span className="sr-only">Open user menu</span>
-                      <div className="h-8 w-8 rounded-full bg-gradient-to-r from-amber-500 to-orange-600 flex items-center justify-center text-white">
+                      <div className="h-8 w-8 rounded-full bg-gradient-to-r from-amber-500 to-orange-600 flex items-center justify-center text-white overflow-hidden border-2 border-white dark:border-gray-700">
                         {user?.user_metadata?.avatar_url || profile?.avatar_url ? (
                           <img 
                             src={user?.user_metadata?.avatar_url || profile?.avatar_url || ''} 

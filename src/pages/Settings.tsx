@@ -16,7 +16,8 @@ import {
   Shield,
   AlertTriangle,
   CheckCircle,
-  X
+  X,
+  Printer
 } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { toast } from 'react-hot-toast'
@@ -240,6 +241,7 @@ export default function Settings() {
 
   const processCliCommand = (command: string) => {
     const cmd = command.toLowerCase().trim()
+    const apiUrl = import.meta.env.VITE_CASHMATIC_PROXY_URL || 'http://localhost:3001'
     
     if (cmd === 'help') {
       setCliOutput(prev => [...prev, {
@@ -247,6 +249,8 @@ export default function Settings() {
         content: `Elérhető parancsok:
 - help: Segítség megjelenítése
 - clear: Konzol törlése
+- scan: Belső hálózatok (VLAN1, VLAN2) valós felderítése
+- ping [ip]: Eszköz valós elérhetőségének ellenőrzése
 - status: Rendszer állapot
 - users: Aktív felhasználók listázása
 - network: Hálózati kapcsolatok
@@ -259,6 +263,83 @@ export default function Settings() {
 - delivery: Kiszállítások nyomon követése
 - exit: Kilépés`
       }])
+    } else if (cmd === 'scan') {
+      setCliOutput(prev => [...prev, {type: 'info', content: 'LAN hálózatok valós feltérképezése folyamatban...'}])
+      
+      const performRealScan = async () => {
+        try {
+          // Közvetlen fetch hívás a szerverhez a cashmatic.ts kikerülésével
+          const res = await fetch(`${apiUrl}/api/network/scan`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ subnets: ['192.168.1.0/24', '192.168.2.0/24'] })
+          })
+          
+          if (res.ok) {
+            const data = await res.json()
+            if (data.success) {
+              let output = "Talált valós eszközök a LAN hálózatokon (ARP Table):\n"
+              output += "----------------------------------------------------------------------\n"
+              output += "IP Cím          MAC Cím            Típus        Eszköz név\n"
+              output += "----------------------------------------------------------------------\n"
+              
+              if (data.devices && data.devices.length > 0) {
+                data.devices.forEach((d: any) => {
+                  output += `${(d.ip || '').padEnd(15)} ${(d.mac || '').padEnd(18)} ${(d.type || 'Ismeretlen').padEnd(12)} ${d.name || ''}\n`
+                })
+                output += "----------------------------------------------------------------------\n"
+                output += `Összesen ${data.devices.length} aktív eszköz található. Szkennelés kész.`
+              } else {
+                output += "Nem található aktív eszköz a hálózaton.\n"
+              }
+              setCliOutput(prev => [...prev, { type: 'success', content: output }])
+            } else {
+              throw new Error(data.message || 'Ismeretlen hiba történt a scannelés során.')
+            }
+          } else {
+            throw new Error(`Szerver hiba: ${res.status}`)
+          }
+        } catch (err: any) {
+          setCliOutput(prev => [...prev, { 
+            type: 'error', 
+            content: `Hiba a hálózat scannelése közben!\nTechnikai infó: Nem sikerült elérni a server.js backendet ezen a címen: ${apiUrl}\nKérlek ellenőrizd, hogy a megfelelő server.js fut-e.\nHibaüzenet: ${err.message}` 
+          }])
+        }
+      }
+      
+      performRealScan()
+    } else if (cmd.startsWith('ping ')) {
+      const target = cmd.substring(5).trim()
+      if (!target) {
+        setCliOutput(prev => [...prev, {type: 'error', content: 'Hiba: Adj meg egy IP címet! Példa: ping 192.168.1.1'}])
+      } else {
+        setCliOutput(prev => [...prev, {type: 'info', content: `Valós ping indítása ${target} felé...`}])
+        
+        const performRealPing = async () => {
+          try {
+            // Közvetlen fetch hívás a pingre
+            const res = await fetch(`${apiUrl}/api/network/ping?ip=${target}`)
+            
+            if (res.ok) {
+              const data = await res.json()
+              if (data.success) {
+                setCliOutput(prev => [...prev, {type: 'success', content: data.output || data.message || 'Sikeres ping válasz.'}])
+              } else {
+                throw new Error(data.message || 'Hiba a ping futtatásakor.')
+              }
+            } else {
+              throw new Error(`Szerver hiba: ${res.status}`)
+            }
+          } catch (err: any) {
+            setCliOutput(prev => [...prev, {
+              type: 'error', 
+              content: `Hálózati hiba a ping közben!\nTechnikai infó: Nem sikerült elérni a server.js backendet ezen a címen: ${apiUrl}\nKérlek ellenőrizd, hogy a server.js fut-e.\nHibaüzenet: ${err.message}`
+            }])
+          }
+        }
+        
+        performRealPing()
+      }
     } else if (cmd === 'clear') {
       setCliOutput([{type: 'info', content: 'Szemesi Pékség Rendszeradminisztráció v1.0.1'}])
     } else if (cmd === 'status') {
@@ -503,6 +584,7 @@ Hőmérséklet (sütő 2): 180°C`
       case 'email': return Mail
       case 'api': return Globe
       case 'users': return User
+      case 'hardware': return Printer
       default: return SettingsIcon
     }
   }

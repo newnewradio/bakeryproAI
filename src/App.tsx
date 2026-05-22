@@ -51,6 +51,7 @@ import PartnerDocuments from './pages/PartnerDocuments'
 import DeliveryNotes from './pages/DeliveryNotes'
 import Partners from './pages/Partners'
 import Locations from './pages/Locations'
+import StoreOrder from './pages/StoreOrder'
 
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
@@ -136,12 +137,13 @@ function App() {
                 <Route path="orders" element={<Orders />} />
                 <Route path="cashmatic" element={<Cashmatic />} />
                 <Route path="personnel" element={<Personnel />} />
-                <Route path="employees" element={<Employees />} />
+                <Route path="employees" element={<Navigate to="/personnel" replace />} />
                 <Route path="work-logs" element={<WorkLogs />} />
                 <Route path="fleet" element={<Fleet />} />
                 <Route path="recipes" element={<Recipes />} />
                 <Route path="inventory" element={<Inventory />} />
                 <Route path="locations" element={<Locations />} />
+                <Route path="store-order" element={<StoreOrder />} />
                 <Route path="email-system" element={<EmailSystem />} />
                 <Route path="product-codes" element={<ProductCodeManager />} />
                 <Route path="product-pricing" element={<ProductPricing />} />

@@ -86,8 +86,10 @@ export default function Invoices() {
   const [invoiceItems, setInvoiceItems] = useState<InvoiceItem[]>([])
   const [partners, setPartners] = useState<Partner[]>([])
   const [orders, setOrders] = useState<Order[]>([])
+  const [deliveryNotes, setDeliveryNotes] = useState<any[]>([])
   const [formData, setFormData] = useState({
     partner_id: '',
+    delivery_note_id: '',
     customer_name: '',
     customer_address: '',
     customer_tax_number: '',
@@ -109,6 +111,7 @@ export default function Invoices() {
     loadInvoices()
     loadPartners()
     loadOrders()
+    loadDeliveryNotes()
   }, [])
 
   const loadInvoices = async () => {
@@ -207,14 +210,33 @@ export default function Invoices() {
     }
   }
 
+  const loadDeliveryNotes = async () => {
+    try {
+      const { data, error } = await supabase
+        .from('delivery_notes')
+        .select('id, order_number, customer_name, customer_address, items')
+        .eq('status', 'delivered')
+        .order('created_at', { ascending: false })
+        .limit(100)
+      
+      if (error) {
+        console.error('Database error:', error)
+        return
+      }
+      
+      if (data) {
+        setDeliveryNotes(data)
+      }
+    } catch (error) {
+      console.error('Hiba a szállítólevelek betöltésekor:', error)
+    }
+  }
+
   const loadInvoiceItems = async (invoiceId: string) => {
     try {
       const { data, error } = await supabase
         .from('invoice_items')
-        .select(`
-          *,
-          product:product_id(name)
-        `)
+        .select('*')
         .eq('invoice_id', invoiceId)
         .order('id')
       
@@ -508,6 +530,26 @@ export default function Invoices() {
         // These would be populated from partner details
         customer_address: '',
         customer_tax_number: ''
+      }))
+    }
+  }
+
+  const handleDeliveryNoteSelect = (deliveryNoteId: string) => {
+    const selectedNote = deliveryNotes.find(n => n.id === deliveryNoteId)
+    if (selectedNote) {
+      setFormData(prev => ({
+        ...prev,
+        delivery_note_id: selectedNote.id,
+        customer_name: selectedNote.customer_name,
+        customer_address: selectedNote.customer_address || '',
+        items: selectedNote.items.map((item: any) => ({
+          description: item.name || 'Termék',
+          quantity: item.quantity || 1,
+          unit_price: item.unit_price || item.price || 0,
+          tax_rate: item.tax_rate || 27,
+          tax_amount: item.tax_amount || (((item.quantity || 1) * (item.unit_price || item.price || 0)) * 0.27),
+          total_amount: item.total_amount || (((item.quantity || 1) * (item.unit_price || item.price || 0)) * 1.27)
+        }))
       }))
     }
   }
@@ -955,6 +997,27 @@ export default function Invoices() {
                           {order.order_number} - {order.customer_name} ({order.total_amount.toLocaleString('hu-HU')} Ft)
                         </option>
                       ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                      Szállítólevél (kiszállítva)
+                    </label>
+                    <select
+                      value={formData.delivery_note_id}
+                      onChange={(e) => handleDeliveryNoteSelect(e.target.value)}
+                      className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-blue-500 focus:border-blue-500 bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                    >
+                      <option value="">Válasszon szállítóleveleket</option>
+                      {deliveryNotes.map(note => {
+                        const total = (note.items || []).reduce((sum: number, item: any) => sum + (item.total_amount || 0), 0)
+                        return (
+                          <option key={note.id} value={note.id}>
+                            {note.order_number} - {note.customer_name} ({total.toLocaleString('hu-HU')} Ft)
+                          </option>
+                        )
+                      })}
                     </select>
                   </div>
 

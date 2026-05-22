@@ -422,19 +422,12 @@ export default function Personnel() {
     try {
       setLoading(true)
       
-      // Calculate duration in seconds
-      const startTime = new Date(workLogFormData.start_time)
-      const endTime = new Date(workLogFormData.end_time)
-      const durationSeconds = Math.floor((endTime.getTime() - startTime.getTime()) / 1000)
-      
-      // Create work log
+      // JAVÍTÁS: user_id (nem employee_id), nincs duration mező
       const workLogData = {
-        employee_id: workLogFormData.employee_id,
+        user_id: workLogFormData.employee_id,
         start_time: workLogFormData.start_time,
         end_time: workLogFormData.end_time,
-        duration: durationSeconds,
-        status: workLogFormData.status,
-        notes: workLogFormData.notes || null
+        status: workLogFormData.status === 'completed' ? 'completed' : 'running'
       }
       
       const { error } = await supabase

@@ -25,7 +25,8 @@ import {
   UserCheck,
   Fuel,
   ExternalLink,
-  AlertTriangle
+  AlertTriangle,
+  Receipt
 } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { toast } from 'react-hot-toast'
@@ -36,12 +37,16 @@ interface DeliveryNote {
   order_id: string | null
   order_number: string
   batch_id: string | null
-  status: 'pending' | 'in_transit' | 'delivered' | 'cancelled'
+  status: 'pending' | 'in_progress' | 'delivered' | 'cancelled'
   driver_id: string | null
   vehicle_id: string | null
   customer_name: string
   customer_address: string | null
   items: any[]
+  subtotal?: number
+  tax_amount?: number
+  discount_amount?: number
+  total_amount?: number
   created_at: string
   updated_at: string
   delivery_date: string | null
@@ -305,7 +310,17 @@ export default function DeliveryNotes() {
 
       if (formData.order_id) {
         const order = orders.find(o => o.id === formData.order_id)
-        if (order) { items = order.items; orderNumber = order.order_number; }
+        if (order) {
+          // Minden tételhez egységesen hozzáadjuk a szükséges mezőket
+          items = order.items.map((item: any) => ({
+            ...item,
+            unit_price: item.unit_price || item.price || 0,
+            tax_rate: 27,
+            tax_amount: ((item.quantity || 1) * (item.unit_price || item.price || 0)) * 0.27,
+            total_amount: ((item.quantity || 1) * (item.unit_price || item.price || 0)) * 1.27
+          }))
+          orderNumber = order.order_number;
+        }
       } else if (formData.batch_id) {
         const batch = batches.find(b => b.id === formData.batch_id)
         if (batch) {
@@ -313,11 +328,21 @@ export default function DeliveryNotes() {
             id: batch.recipe_id,
             name: (batch as any).products?.name || 'Termék',
             quantity: batch.batch_size,
-            unit: 'db'
+            unit: 'db',
+            unit_price: 0,
+            tax_rate: 27,
+            tax_amount: 0,
+            total_amount: 0
           }]
         }
       }
       
+      // Számítások a számla mintájára
+      const subtotal = items.reduce((sum: number, item: any) => sum + ((item.quantity || 0) * (item.unit_price || 0)), 0)
+      const taxAmount = items.reduce((sum: number, item: any) => sum + (item.tax_amount || 0), 0)
+      const discountAmount = 0
+      const totalAmount = subtotal + taxAmount - discountAmount
+
       const { data, error } = await supabase.from('delivery_notes').insert({
         order_id: formData.order_id || null,
         order_number: orderNumber,
@@ -328,13 +353,67 @@ export default function DeliveryNotes() {
         customer_name: formData.customer_name,
         customer_address: formData.customer_address,
         items,
+        subtotal,
+        tax_amount: taxAmount,
+        discount_amount: discountAmount,
+        total_amount: totalAmount,
         delivery_date: formData.delivery_date,
         notes: formData.notes,
         location_id: formData.location_id || null
       }).select().single()
       
       if (error) throw error
-      toast.success('Szállítólevél sikeresen rögzítve!')
+
+      // ✅ ÚJ: Automatikus számla generálás a szállítólevél alapján (Invoices.tsx mintájára)
+      try {
+        const dueDate = new Date()
+        dueDate.setDate(dueDate.getDate() + 30)
+        const invoiceNumber = `INV-${orderNumber}`
+
+        const { data: invoiceData, error: invoiceError } = await supabase
+          .from('invoices')
+          .insert({
+            invoice_number: invoiceNumber,
+            customer_name: formData.customer_name,
+            customer_address: formData.customer_address || null,
+            order_id: formData.order_id || null,
+            order_number: orderNumber,
+            issue_date: new Date().toISOString().split('T')[0],
+            due_date: dueDate.toISOString().split('T')[0],
+            payment_method: 'not_specified',
+            payment_status: 'pending',
+            subtotal: subtotal || 0,
+            tax_amount: taxAmount || 0,
+            discount_amount: discountAmount,
+            total_amount: totalAmount || 0,
+            notes: `Automatikusan generálva a ${orderNumber} szállítólevél alapján`,
+            created_by: (await supabase.auth.getUser()).data.user?.id
+          })
+          .select().single()
+
+        if (!invoiceError && invoiceData && items.length > 0) {
+          // Számlatételek hozzáadása
+          await supabase.from('invoice_items').insert(
+            items.map((item: any) => ({
+              invoice_id: invoiceData.id,
+              description: item.name || 'Termék',
+              quantity: item.quantity || 1,
+              unit_price: item.unit_price || 0,
+              tax_rate: item.tax_rate || 27,
+              tax_amount: item.tax_amount || 0,
+              total_amount: item.total_amount || 0
+            }))
+          )
+          toast.success(`✅ Szállítólevél + Számla (${invoiceNumber}) sikeresen rögzítve!`)
+        } else {
+          toast.success('Szállítólevél sikeresen rögzítve!')
+          if (invoiceError) console.warn('Számla generálás hiba:', invoiceError)
+        }
+      } catch (invoiceErr) {
+        console.warn('Számla auto-generálás nem sikerült:', invoiceErr)
+        toast.success('Szállítólevél sikeresen rögzítve! (Számla manuálisan szükséges)')
+      }
+
       setShowAddModal(false); resetForm(); loadDeliveryNotes();
       handlePrint(data)
     } catch (error: any) {
@@ -358,6 +437,132 @@ export default function DeliveryNotes() {
     } catch (e: any) {
       console.error(e)
       toast.error('PATCH hiba: Az adatbázis elutasította a módosítást.')
+    }
+  }
+
+  // ✅ ÚJ: Szállítás indítása - státusz frissítés + Google Maps navigáció megnyitása
+  const handleStartDelivery = async (note: DeliveryNote) => {
+    try {
+      // 1. Státusz frissítése in_progress-ra
+      const { error } = await supabase
+        .from('delivery_notes')
+        .update({ status: 'in_progress' })
+        .eq('id', note.id)
+
+      if (error) throw error
+
+      toast.success('🚚 Kiszállítás megkezdve!')
+      loadDeliveryNotes()
+
+      // 2. Google Maps megnyitása a kiszállítási címmel
+      if (note.customer_address) {
+        const origin = encodeURIComponent('Balatonszemes, Fő utca 1, Magyarország')
+        const destination = encodeURIComponent(note.customer_address + ', Magyarország')
+        const mapsUrl = `https://www.google.com/maps/dir/?api=1&origin=${origin}&destination=${destination}&travelmode=driving`
+        window.open(mapsUrl, '_blank')
+      } else {
+        toast('ℹ️ Nincs kiszállítási cím megadva, navigáció nem indítható.', { icon: '📍' })
+      }
+    } catch (e: any) {
+      console.error(e)
+      toast.error('Hiba a szállítás indításakor.')
+    }
+  }
+
+  // ✅ ÚJ: Szállítólevél "Kiszállítva" státuszra állítása
+  const handleMarkDelivered = async (note: DeliveryNote) => {
+    try {
+      const { error } = await supabase
+        .from('delivery_notes')
+        .update({ status: 'delivered' })
+        .eq('id', note.id)
+
+      if (error) throw error
+
+      toast.success('✅ Szállítólevél kiszállítottnak jelölve!')
+      loadDeliveryNotes()
+      if (showViewModal) setShowViewModal(false)
+    } catch (e: any) {
+      console.error(e)
+      toast.error('Hiba a státusz frissítésénél.')
+    }
+  }
+
+  // ✅ ÚJ: Számla generálása szállítólevél alapján
+  const handleGenerateInvoice = async (note: DeliveryNote) => {
+    try {
+      setLoading(true)
+
+      // Szállítólevél teljes adatainak letöltése
+      const { data: fullNote, error: fetchError } = await supabase
+        .from('delivery_notes')
+        .select('*')
+        .eq('id', note.id)
+        .single()
+
+      if (fetchError || !fullNote) throw new Error('Szállítólevél adatok nem érhetők el')
+
+      // Számla adatok előkészítése
+      const items = fullNote.items || []
+      const subtotal = items.reduce((sum: number, item: any) => sum + ((item.quantity || 0) * (item.unit_price || 0)), 0)
+      const taxAmount = items.reduce((sum: number, item: any) => sum + (item.tax_amount || 0), 0)
+      const totalAmount = subtotal + taxAmount
+      const dueDate = new Date()
+      dueDate.setDate(dueDate.getDate() + 30)
+      const invoiceNumber = `INV-${fullNote.order_number}-${Date.now().toString().slice(-4)}`
+
+      // Számla beszúrása
+      const { data: invoiceData, error: invoiceError } = await supabase
+        .from('invoices')
+        .insert({
+          invoice_number: invoiceNumber,
+          customer_name: fullNote.customer_name,
+          customer_address: fullNote.customer_address || null,
+          order_id: fullNote.order_id || null,
+          order_number: fullNote.order_number,
+          issue_date: new Date().toISOString().split('T')[0],
+          due_date: dueDate.toISOString().split('T')[0],
+          payment_method: 'not_specified',
+          payment_status: 'pending',
+          subtotal: subtotal || 0,
+          tax_amount: taxAmount || 0,
+          discount_amount: 0,
+          total_amount: totalAmount || 0,
+          notes: `Szállítólevélből (${fullNote.order_number}) automatikusan generálva`,
+          created_by: (await supabase.auth.getUser()).data.user?.id
+        })
+        .select().single()
+
+      if (invoiceError) throw invoiceError
+
+      if (invoiceData && items.length > 0) {
+        // Számlatételek hozzáadása
+        const { error: itemsError } = await supabase
+          .from('invoice_items')
+          .insert(
+            items.map((item: any) => ({
+              invoice_id: invoiceData.id,
+              description: item.name || 'Termék',
+              quantity: item.quantity || 1,
+              unit_price: item.unit_price || 0,
+              tax_rate: item.tax_rate || 27,
+              tax_amount: item.tax_amount || 0,
+              total_amount: item.total_amount || 0
+            }))
+          )
+
+        if (itemsError) {
+          console.error('Számlatételek hozzáadásánál hiba:', itemsError)
+        }
+
+        toast.success(`✅ Számla sikeresen létrehozva!`)
+        setShowViewModal(false)
+      }
+    } catch (e: any) {
+      console.error(e)
+      toast.error('Hiba a számla generálásánál: ' + e.message)
+    } finally {
+      setLoading(false)
     }
   }
 
@@ -391,7 +596,7 @@ export default function DeliveryNotes() {
   const getStatusColor = (status: string) => {
     switch (status) {
       case 'pending': return 'bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400'
-      case 'in_transit': return 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400'
+      case 'in_progress': return 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400'
       case 'delivered': return 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400'
       case 'cancelled': return 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400'
       default: return 'bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-400'
@@ -446,7 +651,7 @@ export default function DeliveryNotes() {
            >
              <option value="all">MINDEN ÁLLAPOT</option>
              <option value="pending">VÁRAKOZÓ</option>
-             <option value="in_transit">SZÁLLÍTÁS ALATT</option>
+             <option value="in_progress">SZÁLLÍTÁS ALATT</option>
              <option value="delivered">KISZÁLLÍTVA</option>
            </select>
            <button className="p-4 bg-gray-800 rounded-2xl text-gray-400 hover:text-white transition-all"><Filter/></button>
@@ -474,7 +679,7 @@ export default function DeliveryNotes() {
                     </div>
                   </div>
                   <span className={`px-5 py-1.5 rounded-full text-[10px] font-black uppercase tracking-widest shadow-lg ${getStatusColor(note.status)}`}>
-                    {note.status === 'pending' ? 'Várakozik' : note.status === 'in_transit' ? 'Úton' : 'Kész'}
+                    {note.status === 'pending' ? 'Várakozik' : note.status === 'in_progress' ? 'Úton' : 'Kész'}
                   </span>
                 </div>
 
@@ -529,18 +734,30 @@ export default function DeliveryNotes() {
 
                 {note.status === 'pending' && (
                   <button 
-                    onClick={() => handleUpdateStatus(note.id, 'in_transit')} 
+                    onClick={() => handleStartDelivery(note)} 
                     className="w-full bg-blue-600 py-5 rounded-[1.5rem] font-black uppercase text-sm tracking-tighter hover:bg-blue-500 transition-all flex items-center justify-center gap-3 shadow-[0_10px_30px_rgba(37,99,235,0.2)]"
                   >
-                    <Navigation size={20} /> SZÁLLÍTÁS MEGKEZDÉSE
+                    <Navigation size={20} /> SZÁLLÍTÁS MEGKEZDÉSE + NAVIGÁCIÓ
                   </button>
                 )}
 
-                {note.status === 'in_transit' && (
-                   <div className="flex items-center justify-center gap-3 p-4 bg-blue-500/5 rounded-2xl border border-blue-500/10">
-                      <div className="h-2 w-2 bg-blue-500 rounded-full animate-ping" />
-                      <span className="text-[10px] font-black text-blue-500 uppercase tracking-widest">Kiszállítás folyamatban...</span>
-                   </div>
+                {note.status === 'in_progress' && (
+                   <button 
+                    onClick={() => handleMarkDelivered(note)}
+                    className="w-full bg-green-600 py-5 rounded-[1.5rem] font-black uppercase text-sm tracking-tighter hover:bg-green-500 transition-all flex items-center justify-center gap-3 shadow-[0_10px_30px_rgba(34,197,94,0.2)]"
+                   >
+                    <CheckCircle size={20} /> KISZÁLLÍTVA
+                   </button>
+                )}
+
+                {note.status === 'delivered' && (
+                   <button 
+                    onClick={() => handleGenerateInvoice(note)}
+                    disabled={loading}
+                    className="w-full bg-purple-600 py-5 rounded-[1.5rem] font-black uppercase text-sm tracking-tighter hover:bg-purple-500 transition-all flex items-center justify-center gap-3 shadow-[0_10px_30px_rgba(147,51,234,0.2)] disabled:opacity-50"
+                   >
+                    <Receipt size={20} /> SZÁMLA GENERÁLÁS
+                   </button>
                 )}
               </div>
             </div>
@@ -676,7 +893,13 @@ export default function DeliveryNotes() {
             <div className="flex flex-col md:flex-row gap-6">
                <button onClick={() => handlePrint(selectedNote)} className="flex-1 bg-green-600 py-8 rounded-[2.5rem] font-black flex items-center justify-center gap-4 text-white text-2xl hover:bg-green-500 transition-all shadow-[0_20px_50px_rgba(34,197,94,0.3)]"><Printer size={32}/> NYOMTATÁS</button>
                {selectedNote.status === 'pending' && (
-                  <button onClick={() => handleUpdateStatus(selectedNote.id, 'in_transit')} className="flex-1 bg-blue-600 py-8 rounded-[2.5rem] font-black flex items-center justify-center gap-4 text-white text-2xl hover:bg-blue-500 transition-all shadow-[0_20px_50px_rgba(37,99,235,0.3)]"><Navigation size={32}/> SZÁLLÍTÁS INDÍTÁSA</button>
+                  <button onClick={() => { setShowViewModal(false); handleStartDelivery(selectedNote) }} className="flex-1 bg-blue-600 py-8 rounded-[2.5rem] font-black flex items-center justify-center gap-4 text-white text-2xl hover:bg-blue-500 transition-all shadow-[0_20px_50px_rgba(37,99,235,0.3)]"><Navigation size={32}/> SZÁLLÍTÁS INDÍTÁSA + NAVIGÁCIÓ</button>
+               )}
+               {selectedNote.status === 'in_progress' && (
+                  <button onClick={() => handleMarkDelivered(selectedNote)} className="flex-1 bg-green-600 py-8 rounded-[2.5rem] font-black flex items-center justify-center gap-4 text-white text-2xl hover:bg-green-500 transition-all shadow-[0_20px_50px_rgba(34,197,94,0.3)]"><CheckCircle size={32}/> KISZÁLLÍTVA</button>
+               )}
+               {selectedNote.status === 'delivered' && (
+                  <button onClick={() => handleGenerateInvoice(selectedNote)} disabled={loading} className="flex-1 bg-purple-600 py-8 rounded-[2.5rem] font-black flex items-center justify-center gap-4 text-white text-2xl hover:bg-purple-500 transition-all shadow-[0_20px_50px_rgba(147,51,234,0.3)] disabled:opacity-50"><Receipt size={32}/> SZÁMLA GENERÁLÁS</button>
                )}
                <button onClick={() => setShowViewModal(false)} className="bg-gray-800 px-16 py-8 rounded-[2.5rem] font-black text-xl text-gray-500 hover:text-white transition-all">BEZÁRÁS</button>
             </div>
