@@ -1,0 +1,4 @@
+"name","type","length","leftDigits","rightDigits"
+"Htipusazon","INTEGER","1","1","0"
+"Htipusnev","STRING","18","0","0"
+"Htipusszin","INTEGER","8","8","0"

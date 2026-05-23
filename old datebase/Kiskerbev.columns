@@ -1,0 +1,6 @@
+"name","type","length","leftDigits","rightDigits"
+"KiskerBevAzon","INTEGER","1","1","0"
+"Raktarazon","INTEGER","1","1","0"
+"Tipus","STRING","0","0","0"
+"Datum","STRING","19","0","0"
+"Megjegyzes","STRING","0","0","0"

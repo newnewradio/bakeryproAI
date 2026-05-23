@@ -1,0 +1,5 @@
+"name","type","length","leftDigits","rightDigits"
+"Datum","STRING","19","0","0"
+"Anyagazon","STRING","3","0","0"
+"Mennyiseg","INTEGER","3","3","0"
+"Megrendelve","STRING","4","0","0"

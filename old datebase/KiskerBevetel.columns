@@ -1,0 +1,7 @@
+"name","type","length","leftDigits","rightDigits"
+"RaktarAzon","INTEGER","1","1","0"
+"Datumtol","STRING","19","0","0"
+"Osszeg","INTEGER","5","5","0"
+"Datumig","STRING","19","0","0"
+"afa","STRING","3","0","0"
+"Kbevazon","INTEGER","1","1","0"

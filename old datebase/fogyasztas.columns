@@ -1,0 +1,6 @@
+"name","type","length","leftDigits","rightDigits"
+"rendszam","STRING","7","0","0"
+"datum","STRING","19","0","0"
+"elozoallas","INTEGER","5","5","0"
+"mostaniallas","INTEGER","5","5","0"
+"fogyasztas","INTEGER","4","4","0"

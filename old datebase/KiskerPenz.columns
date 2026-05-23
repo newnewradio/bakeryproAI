@@ -1,0 +1,4 @@
+"name","type","length","leftDigits","rightDigits"
+"RaktarAzon","INTEGER","1","1","0"
+"Datum","STRING","19","0","0"
+"Osszeg","INTEGER","1","1","0"

@@ -1,0 +1,7 @@
+"name","type","length","leftDigits","rightDigits"
+"Ev","INTEGER","4","4","0"
+"Honap","INTEGER","2","2","0"
+"Nap","INTEGER","2","2","0"
+"Munkatarsazon","INTEGER","2","2","0"
+"Htipusazon","INTEGER","1","1","0"
+"Datum","STRING","19","0","0"

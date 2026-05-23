@@ -1,0 +1,4 @@
+"name","type","length","leftDigits","rightDigits"
+"Gyartasazon","INTEGER","2","2","0"
+"Anyagazon","STRING","4","0","0"
+"Mennyiseg","INTEGER","4","4","0"

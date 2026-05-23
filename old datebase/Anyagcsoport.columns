@@ -1,0 +1,3 @@
+"name","type","length","leftDigits","rightDigits"
+"Anyagcsoportazon","INTEGER","2","2","0"
+"Anyagcsoportnev","STRING","24","0","0"

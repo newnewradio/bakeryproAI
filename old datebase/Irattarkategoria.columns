@@ -1,0 +1,4 @@
+"name","type","length","leftDigits","rightDigits"
+"Kategoriaazon","INTEGER","2","2","0"
+"Kategorianev","STRING","109","0","0"
+"Selejtev","INTEGER","2","2","0"
