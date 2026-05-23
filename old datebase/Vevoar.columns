@@ -1,0 +1,6 @@
+"name","type","length","leftDigits","rightDigits"
+"Vevoazon","INTEGER","3","3","0"
+"Anyagazon","STRING","5","0","0"
+"Artipus","INTEGER","2","2","0"
+"Kedvezmeny","DECIMAL","6","3","2"
+"Szazalek","STRING","5","0","0"

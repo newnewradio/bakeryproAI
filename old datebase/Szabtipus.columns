@@ -1,0 +1,3 @@
+"name","type","length","leftDigits","rightDigits"
+"Szabtipusazon","INTEGER","1","1","0"
+"Szabtipusnev","STRING","20","0","0"

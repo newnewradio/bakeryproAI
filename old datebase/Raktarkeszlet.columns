@@ -1,0 +1,4 @@
+"name","type","length","leftDigits","rightDigits"
+"Raktarazon","INTEGER","1","1","0"
+"Anyagazon","STRING","5","0","0"
+"Mennyiseg","STRING","13","7","5"

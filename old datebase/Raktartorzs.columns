@@ -1,0 +1,7 @@
+"name","type","length","leftDigits","rightDigits"
+"Raktarazon","INTEGER","1","1","0"
+"Raktarnev","STRING","22","0","0"
+"Negativkeszlet","STRING","5","0","0"
+"Kisker","STRING","5","0","0"
+"Szlahely","STRING","5","0","0"
+"bevhely","STRING","1","1","0"

@@ -1,0 +1,4 @@
+"name","type","length","leftDigits","rightDigits"
+"Szallitoazon","INTEGER","2","2","0"
+"Egysegar","DECIMAL","6","5","2"
+"Anyagazon","STRING","5","0","0"

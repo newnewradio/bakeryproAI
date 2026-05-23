@@ -1,0 +1,5 @@
+"name","type","length","leftDigits","rightDigits"
+"Felhazon","INTEGER","5","5","0"
+"Szoveg","STRING","73","0","0"
+"Raktarazon","INTEGER","1","1","0"
+"Raktarazon2","INTEGER","1","1","0"

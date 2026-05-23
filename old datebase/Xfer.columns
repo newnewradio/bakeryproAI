@@ -1,0 +1,7 @@
+"name","type","length","leftDigits","rightDigits"
+"Anyagazon","STRING","3","0","0"
+"Mennyiseg","INTEGER","3","3","0"
+"Raktarbol","INTEGER","1","1","0"
+"Raktarba","INTEGER","1","1","0"
+"BSz","INTEGER","1","1","0"
+"Datum","STRING","19","0","0"

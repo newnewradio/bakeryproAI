@@ -1,0 +1,5 @@
+"name","type","length","leftDigits","rightDigits"
+"Vevoazon","INTEGER","3","3","0"
+"Fmazon","INTEGER","1","1","0"
+"Hatarido","INTEGER","2","2","0"
+"Kedvezmeny","STRING","5","0","0"

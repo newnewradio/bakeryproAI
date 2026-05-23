@@ -1,0 +1,5 @@
+"name","type","length","leftDigits","rightDigits"
+"Vevoazon","INTEGER","3","3","0"
+"Peldany","INTEGER","1","1","0"
+"SzlPeldany","INTEGER","1","1","0"
+"SzlAr","STRING","5","0","0"

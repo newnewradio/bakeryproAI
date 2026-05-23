@@ -1,0 +1,5 @@
+"name","type","length","leftDigits","rightDigits"
+"Munkatarsazon","INTEGER","1","1","0"
+"Szabtipusazon","INTEGER","1","1","0"
+"Osszes","INTEGER","2","2","0"
+"Igenybevett","INTEGER","2","2","0"
