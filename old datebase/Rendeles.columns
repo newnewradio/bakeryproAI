@@ -4,7 +4,7 @@
 "Rendelestipus","INTEGER","1","1","0"
 "Teljesitve","STRING","5","0","0"
 "Nyomtatva","STRING","5","0","0"
-"Rendelesszam","INTEGER","5","5","0"
+"Rendelesszam","INTEGER","6","6","0"
 "Szamlaazon","INTEGER","6","6","0"
 "Igazolva","STRING","5","0","0"
 "Nyugta","STRING","5","0","0"

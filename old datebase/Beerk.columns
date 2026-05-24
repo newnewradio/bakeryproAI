@@ -1,5 +1,5 @@
 "name","type","length","leftDigits","rightDigits"
 "Beerkazon","INTEGER","2","2","0"
-"Szamlaszam","STRING","20","0","0"
+"Szamlaszam","INTEGER","5","5","0"
 "Szallito","INTEGER","2","2","0"
 "Datum","STRING","19","0","0"

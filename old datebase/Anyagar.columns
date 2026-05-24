@@ -1,4 +1,4 @@
 "name","type","length","leftDigits","rightDigits"
-"Anyagazon","STRING","5","0","0"
-"Anyagar","DECIMAL","8","3","5"
+"Anyagazon","STRING","6","0","0"
+"Anyagar","DECIMAL","8","4","5"
 "Artipusazon","INTEGER","4","4","0"
